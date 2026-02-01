@@ -1,0 +1,355 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark Theme Base */
+:root {
+  --bg-primary: #000000;
+  --bg-secondary: #111111;
+  --bg-tertiary: #1a1a1a;
+  --text-primary: #ffffff;
+  --text-secondary: #e5e5e5;
+  --text-muted: #a3a3a3;
+  --border-primary: rgba(255, 255, 255, 0.1);
+  --border-secondary: rgba(255, 255, 255, 0.05);
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.1);
+}
+
+/* Global Dark Theme */
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  background-color: transparent;
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#root {
+  background-color: transparent;
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+/* Dark Liquid Glass Effect */
+.liquid-glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(180%) brightness(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%) brightness(120%);
+  border: 1px solid var(--glass-border);
+  border-radius: 1rem;
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Enhanced liquid glass with shimmer effect */
+.liquid-glass::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.05),
+    transparent
+  );
+  animation: shimmer 3s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes shimmer {
+  0% {
+    left: -100%;
+  }
+  50% {
+    left: 100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* Fallback for browsers without backdrop-filter support */
+@supports not (backdrop-filter: blur()) {
+  .liquid-glass {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+}
+
+.draggable-area {
+  -webkit-app-region: drag;
+  height: 32px;
+  width: 100%;
+  background: transparent;
+  cursor: move;
+  position: relative;
+  z-index: 1000;
+  border-radius: 1rem 1rem 0 0;
+}
+
+/* Make sure buttons and interactive elements are not draggable */
+button, input, select, textarea, .interactive {
+  -webkit-app-region: no-drag;
+}
+
+/* Override for the liquid glass bar - make it draggable */
+.liquid-glass.draggable-area {
+  -webkit-app-region: drag;
+  cursor: move;
+}
+
+/* But keep buttons inside clickable */
+.liquid-glass.draggable-area button {
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+}
+
+/* Add visual feedback for draggable area - DISABLED */
+.draggable-area:hover {
+  /* Removed hover effects to prevent capsule background changes */
+}
+
+/* Dark theme liquid glass variant */
+.liquid-glass-dark {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(16px) saturate(180%) brightness(80%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%) brightness(80%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+}
+
+/* Ensure content is not blurred */
+.glass-content {
+  position: relative;
+  z-index: 1;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Chat container specific styling - Dark Theme */
+.liquid-glass.chat-container {
+  min-height: auto;
+  height: auto;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px) saturate(200%) brightness(90%);
+  -webkit-backdrop-filter: blur(20px) saturate(200%) brightness(90%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 
+    0 12px 40px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+/* Thin bar variant of liquid glass - for command bar - Dark Theme */
+.liquid-glass-bar {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(16px) saturate(180%) brightness(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%) brightness(120%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  position: relative;
+  overflow: hidden;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+}
+
+/* Shimmer effect for bar variant */
+.liquid-glass-bar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.05),
+    transparent
+  );
+  animation: shimmer 3s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Dark Theme Input Styles */
+input, textarea, select {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: var(--text-primary) !important;
+  border-radius: 0.5rem;
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted) !important;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Dark Theme Button Styles */
+button {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: var(--text-primary) !important;
+  border-radius: 0.5rem;
+  transition: all 0.2s ease;
+}
+
+button:hover {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+button:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+}
+
+/* Dark Theme Text Colors */
+.text-gray-600 {
+  color: var(--text-muted) !important;
+}
+
+.text-gray-700 {
+  color: var(--text-secondary) !important;
+}
+
+.text-gray-800 {
+  color: var(--text-primary) !important;
+}
+
+.text-gray-100 {
+  color: var(--text-primary) !important;
+}
+
+.text-white {
+  color: var(--text-primary) !important;
+}
+
+/* Dark Theme Background Colors */
+.bg-white {
+  background-color: var(--bg-secondary) !important;
+}
+
+.bg-gray-100 {
+  background-color: var(--bg-tertiary) !important;
+}
+
+.bg-gray-600 {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.bg-gray-700 {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Dark Theme Border Colors */
+.border-gray-200 {
+  border-color: var(--border-primary) !important;
+}
+
+.border-gray-300 {
+  border-color: var(--border-primary) !important;
+}
+
+.border-gray-500 {
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+.border-gray-600 {
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+.border-white {
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* Dark Theme Specific Overrides */
+.bg-black\/60 {
+  background-color: rgba(0, 0, 0, 0.8) !important;
+}
+
+.bg-white\/10 {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+.bg-white\/25 {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.bg-white\/85 {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Scrollbar Dark Theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Toast Dark Theme */
+[data-radix-toast-viewport] {
+  background-color: transparent !important;
+}
+
+/* Syntax Highlighter Dark Theme Override */
+.language-python {
+  background-color: #1a1a1a !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 0.5rem !important;
+}
+
+/* Loading Animation Dark Theme - DISABLED */
+.animate-pulse {
+  /* Removed pulsing animation */
+  opacity: 1;
+}
+
+/* Selection Dark Theme */
+::selection {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-primary);
+}
+
+::-moz-selection {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-primary);
+}
