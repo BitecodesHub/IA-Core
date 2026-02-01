@@ -10,6 +10,7 @@ import {
 } from "../components/ui/toast"
 import QueueCommands from "../components/Queue/QueueCommands"
 import ModelSelector from "../components/ui/ModelSelector"
+import MessageRenderer from "../components/ui/MessageRenderer"
 
 interface QueueProps {
   setView: React.Dispatch<React.SetStateAction<"queue" | "solutions" | "debug">>
@@ -421,7 +422,11 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
                             : "bg-black text-white border-2 border-white"
                         }`}
                       >
-                        {msg.text || (msg.isStreaming ? "Generating response..." : "")}
+                        {msg.role === "user" ? (
+                          <span className="whitespace-pre-wrap">{msg.text}</span>
+                        ) : (
+                          <MessageRenderer text={msg.text || (msg.isStreaming ? "Generating response..." : "")} />
+                        )}
                         {msg.isStreaming && (
                           <span className="inline-flex ml-2 text-white/60">●</span>
                         )}
