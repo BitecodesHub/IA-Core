@@ -105,7 +105,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           background: rgba(0, 0, 0, 0.85);
           backdrop-filter: blur(12px);
           -webkit-backdrop-filter: blur(12px);
-          border: 2px solid #ffffff;
+          border: 2px solid rgba(255, 255, 255, 0.3);
           border-radius: 9999px;
           position: relative;
           overflow: visible;

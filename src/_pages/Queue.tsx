@@ -417,7 +417,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
                       <div
                         className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
                           msg.role === "user" 
-                            ? "bg-white text-black border-2 border-white" 
+                            ? "bg-white text-white border-2 border-white" 
                             : "bg-black text-white border-2 border-white"
                         }`}
                       >
@@ -451,7 +451,8 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
             >
               <input
                 ref={chatInputRef}
-                className="flex-1 bg-black border-2 border-white text-white px-3 py-2 rounded-lg placeholder-white focus:outline-none focus:border-white"
+                className="flex-1 bg-black border-2 border-white px-3 py-2 rounded-lg placeholder-white/60 focus:outline-none focus:border-white"
+                style={{ color: '#ffffff' }}
                 placeholder="Type your message..."
                 value={chatInput}
                 onChange={e => setChatInput(e.target.value)}
