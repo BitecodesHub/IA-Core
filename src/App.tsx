@@ -4,6 +4,7 @@ import { ToastViewport } from "@radix-ui/react-toast"
 import { useEffect, useRef, useState } from "react"
 import Solutions from "./_pages/Solutions"
 import { QueryClient, QueryClientProvider } from "react-query"
+import ErrorBoundary from "./components/ErrorBoundary"
 
 declare global {
   interface Window {
@@ -33,6 +34,7 @@ declare global {
       onSolutionError: (callback: (error: string) => void) => () => void
       onSolutionSuccess: (callback: (data: any) => void) => () => void
       onProblemExtracted: (callback: (data: any) => void) => () => void
+      onScreenshotAnalysisStream: (callback: (data: any) => void) => () => void
 
       onDebugSuccess: (callback: (data: any) => void) => () => void
 
@@ -55,6 +57,7 @@ declare global {
       switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
       switchToGemini: (apiKey?: string) => Promise<{ success: boolean; error?: string }>
       testLlmConnection: () => Promise<{ success: boolean; error?: string }>
+      processScreenshotWithChoice: (analysisType: 'analyze' | 'answer') => Promise<{ success: boolean; error?: string }>
       
       invoke: (channel: string, ...args: any[]) => Promise<any>
     }
@@ -164,20 +167,22 @@ const App: React.FC = () => {
   }, [])
 
   return (
-    <div ref={containerRef} className="min-h-0 text-white">
-      <QueryClientProvider client={queryClient}>
-        <ToastProvider>
-          {view === "queue" ? (
-            <Queue setView={setView} />
-          ) : view === "solutions" ? (
-            <Solutions setView={setView} />
-          ) : (
-            <></>
-          )}
-          <ToastViewport />
-        </ToastProvider>
-      </QueryClientProvider>
-    </div>
+    <ErrorBoundary>
+      <div ref={containerRef} className="min-h-0 text-white">
+        <QueryClientProvider client={queryClient}>
+          <ToastProvider>
+            {view === "queue" ? (
+              <Queue setView={setView} />
+            ) : view === "solutions" ? (
+              <Solutions setView={setView} />
+            ) : (
+              <></>
+            )}
+            <ToastViewport />
+          </ToastProvider>
+        </QueryClientProvider>
+      </div>
+    </ErrorBoundary>
   )
 }
 

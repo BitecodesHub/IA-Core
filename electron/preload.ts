@@ -44,6 +44,7 @@ interface ElectronAPI {
   switchToGemini: (apiKey?: string) => Promise<{ success: boolean; error?: string }>
   testLlmConnection: () => Promise<{ success: boolean; error?: string }>
   processScreenshotWithChoice: (analysisType: 'analyze' | 'answer') => Promise<{ success: boolean; error?: string }>
+  cancelScreenshotProcessing: () => Promise<{ success: boolean; error?: string }>
   
   invoke: (channel: string, ...args: any[]) => Promise<any>
 }
@@ -198,6 +199,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   switchToGemini: (apiKey?: string) => ipcRenderer.invoke("switch-to-gemini", apiKey),
   testLlmConnection: () => ipcRenderer.invoke("test-llm-connection"),
   processScreenshotWithChoice: (analysisType: 'analyze' | 'answer') => ipcRenderer.invoke("process-screenshot-with-choice", analysisType),
+  cancelScreenshotProcessing: () => ipcRenderer.invoke("cancel-screenshot-processing"),
   
   invoke: (channel: string, ...args: any[]) => ipcRenderer.invoke(channel, ...args)
 } as ElectronAPI)

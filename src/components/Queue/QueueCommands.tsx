@@ -224,21 +224,6 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           </div>
         </div>
 
-        {/* Solve Command */}
-        {screenshots.length > 0 && (
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] sm:text-[11px] leading-none text-white whitespace-nowrap">Solve</span>
-            <div className="flex gap-1">
-              <button className="stable-button rounded-lg px-2 py-1 text-[10px] sm:text-[11px] leading-none text-white">
-                ⌘
-              </button>
-              <button className="stable-button rounded-lg px-2 py-1 text-[10px] sm:text-[11px] leading-none text-white">
-                ↵
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Voice Recording Button */}
         <div className="flex items-center gap-2">
           <button
@@ -330,26 +315,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                       </div>
                       <p className="text-[10px] leading-relaxed text-white/80">
                         Take a screenshot of the problem description. The tool
-                        will extract and analyze the problem. The 5 latest
-                        screenshots are saved.
-                      </p>
-                    </div>
-
-                    {/* Solve Command */}
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-white flex-shrink-0">Solve Problem</span>
-                        <div className="flex gap-1 flex-shrink-0">
-                          <span className="bg-black border border-white/50 px-2 py-1 rounded-lg text-[10px] leading-none text-white">
-                            ⌘
-                          </span>
-                          <span className="bg-black border border-white/50 px-2 py-1 rounded-lg text-[10px] leading-none text-white">
-                            ↵
-                          </span>
-                        </div>
-                      </div>
-                      <p className="text-[10px] leading-relaxed text-white/80">
-                        Generate a solution based on the current problem.
+                        will automatically analyze and provide solutions.
                       </p>
                     </div>
                   </div>

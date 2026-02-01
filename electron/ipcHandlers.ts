@@ -244,4 +244,15 @@ export function initializeIpcHandlers(appState: AppState): void {
       return { success: false, error: error.message };
     }
   });
+
+  // IPC handler to cancel screenshot processing
+  ipcMain.handle("cancel-screenshot-processing", async () => {
+    try {
+      appState.processingHelper.cancelOngoingRequests();
+      return { success: true };
+    } catch (error: any) {
+      console.error("Error in cancel-screenshot-processing handler:", error);
+      return { success: false, error: error.message };
+    }
+  });
 }

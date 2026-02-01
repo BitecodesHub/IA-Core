@@ -7,21 +7,27 @@ export class ShortcutsHelper {
   constructor(appState: AppState) {
     this.appState = appState
   }
-
   public registerGlobalShortcuts(): void {
     // Add global shortcut to show/center window
     globalShortcut.register("CommandOrControl+Shift+Space", () => {
       console.log("Show/Center window shortcut pressed...")
       this.appState.centerAndShowWindow()
-    })
- 
+    })   
     globalShortcut.register("CommandOrControl+H", async () => {
       const mainWindow = this.appState.getMainWindow()
       if (mainWindow) {
         console.log("Taking screenshot...")
         try {
           const screenshotPath = await this.appState.takeScreenshot()
+          console.log("Screenshot saved to:", screenshotPath)
+          
           const preview = await this.appState.getImagePreview(screenshotPath)
+          
+          // Log the current queue state
+          const queue = this.appState.getScreenshotQueue()
+          console.log("Current screenshot queue:", queue)
+          console.log("Latest screenshot in queue:", queue[queue.length - 1])
+          
           mainWindow.webContents.send("screenshot-taken", {
             path: screenshotPath,
             preview
