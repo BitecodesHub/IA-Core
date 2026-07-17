@@ -8,6 +8,17 @@ import screenshot from "screenshot-desktop"
 
 import os from "node:os"
 
+// Stealth: temp screenshot paths embed a UUID and reveal capture activity — keep
+// them out of production logs.
+const isDev = process.env.NODE_ENV === "development"
+
+/** Heuristic for macOS Screen Recording permission failures from `screencapture`. */
+function isScreenPermissionError(message: string): boolean {
+  return /could not create image|not authorized|screen recording|screencapture|operation not permitted|denied/i.test(
+    message
+  )
+}
+
 export class ScreenshotHelper {
   private screenshotQueue: string[] = []
   private extraScreenshotQueue: string[] = []
@@ -17,16 +28,15 @@ export class ScreenshotHelper {
   private readonly extraScreenshotDir: string
 
   private view: "queue" | "solutions" = "queue"
+  /** Serializes captures so rapid triggers (e.g. mashing the shortcut) cannot race. */
+  private captureChain: Promise<void> = Promise.resolve()
 
   constructor(view: "queue" | "solutions" = "queue") {
     this.view = view
 
     // Initialize directories
     this.screenshotDir = path.join(app.getPath("userData"), "screenshots")
-    this.extraScreenshotDir = path.join(
-      app.getPath("userData"),
-      "extra_screenshots"
-    )
+    this.extraScreenshotDir = path.join(app.getPath("userData"), "extra_screenshots")
 
     // Create directories if they don't exist
     if (!fs.existsSync(this.screenshotDir)) {
@@ -53,30 +63,39 @@ export class ScreenshotHelper {
     return this.extraScreenshotQueue
   }
 
-  public clearQueues(): void {
-    // Clear screenshotQueue
-    this.screenshotQueue.forEach((screenshotPath) => {
-      fs.unlink(screenshotPath, (err) => {
-        if (err)
-          console.error(`Error deleting screenshot at ${screenshotPath}:`, err)
-      })
-    })
+  public async clearQueues(): Promise<void> {
+    const toDelete = [...this.screenshotQueue, ...this.extraScreenshotQueue]
     this.screenshotQueue = []
-
-    // Clear extraScreenshotQueue
-    this.extraScreenshotQueue.forEach((screenshotPath) => {
-      fs.unlink(screenshotPath, (err) => {
-        if (err)
-          console.error(
-            `Error deleting extra screenshot at ${screenshotPath}:`,
-            err
-          )
-      })
-    })
     this.extraScreenshotQueue = []
+    await Promise.allSettled(
+      toDelete.map((p) =>
+        fs.promises.unlink(p).catch((err) => {
+          if (isDev && err?.code !== "ENOENT") console.error(`Error deleting ${p}:`, err)
+        })
+      )
+    )
   }
 
   public async takeScreenshot(
+    hideMainWindow: () => void,
+    showMainWindow: () => void
+  ): Promise<string> {
+    // Serialize captures: each call waits for the previous one to finish so
+    // concurrent triggers cannot race the temp file or the queue.
+    const previous = this.captureChain
+    let release: () => void = () => {}
+    this.captureChain = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    try {
+      await previous.catch(() => {})
+      return await this.captureScreenshot(hideMainWindow, showMainWindow)
+    } finally {
+      release()
+    }
+  }
+
+  private async captureScreenshot(
     hideMainWindow: () => void,
     showMainWindow: () => void
   ): Promise<string> {
@@ -84,12 +103,12 @@ export class ScreenshotHelper {
       hideMainWindow()
 
       // Add a small delay to ensure window is hidden
-      await new Promise(resolve => setTimeout(resolve, 100))
+      await new Promise((resolve) => setTimeout(resolve, 100))
 
       // Use a temporary file path to avoid issues with spaces in directory names
       // screenshot-desktop may fail with spaces in paths on some systems
       const tempPath = path.join(os.tmpdir(), `${uuidv4()}.png`)
-      console.log(`Taking screenshot to temp path: ${tempPath}`)
+      if (isDev) console.log(`Taking screenshot to temp path: ${tempPath}`)
 
       try {
         await screenshot({ filename: tempPath })
@@ -101,7 +120,7 @@ export class ScreenshotHelper {
       // Verify temp file creation with retries
       let retries = 20
       while (retries > 0 && !fs.existsSync(tempPath)) {
-        await new Promise(resolve => setTimeout(resolve, 100))
+        await new Promise((resolve) => setTimeout(resolve, 100))
         retries--
       }
 
@@ -117,9 +136,13 @@ export class ScreenshotHelper {
         finalPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
       }
 
-      // Move file to final destination
-      await fs.promises.rename(tempPath, finalPath)
-      console.log(`Moved screenshot to: ${finalPath}`)
+      // Move file to final destination; never leak the temp file on failure.
+      try {
+        await fs.promises.rename(tempPath, finalPath)
+      } catch (renameErr) {
+        await fs.promises.unlink(tempPath).catch(() => {})
+        throw renameErr
+      }
 
       if (this.view === "queue") {
         this.screenshotQueue.push(finalPath)
@@ -152,9 +175,17 @@ export class ScreenshotHelper {
       }
 
       return finalPath
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error taking screenshot:", error)
-      throw new Error(`Failed to take screenshot: ${error.message}`)
+      const msg = String(error?.message ?? error)
+      if (isScreenPermissionError(msg)) {
+        const err: any = new Error(
+          "Screen Recording permission is required. Open System Settings → Privacy & Security → Screen Recording, enable this app, then relaunch."
+        )
+        err.code = "SCREEN_PERMISSION"
+        throw err
+      }
+      throw new Error(`Failed to take screenshot: ${msg}`)
     } finally {
       // Ensure window is always shown again
       showMainWindow()
@@ -171,15 +202,11 @@ export class ScreenshotHelper {
     }
   }
 
-  public async deleteScreenshot(
-    path: string
-  ): Promise<{ success: boolean; error?: string }> {
+  public async deleteScreenshot(path: string): Promise<{ success: boolean; error?: string }> {
     try {
       await fs.promises.unlink(path)
       if (this.view === "queue") {
-        this.screenshotQueue = this.screenshotQueue.filter(
-          (filePath) => filePath !== path
-        )
+        this.screenshotQueue = this.screenshotQueue.filter((filePath) => filePath !== path)
       } else {
         this.extraScreenshotQueue = this.extraScreenshotQueue.filter(
           (filePath) => filePath !== path

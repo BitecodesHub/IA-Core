@@ -8,7 +8,7 @@ interface SolutionCommandsProps {
 
 const SolutionCommands: React.FC<SolutionCommandsProps> = ({
   extraScreenshots,
-  onTooltipVisibilityChange
+  onTooltipVisibilityChange,
 }) => {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -51,9 +51,7 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
           {/* Screenshot */}
           <div className="flex items-center gap-2 whitespace-nowrap">
             <span className="text-[11px] leading-none truncate">
-              {extraScreenshots.length === 0
-                ? "Screenshot your code"
-                : "Screenshot"}
+              {extraScreenshots.length === 0 ? "Screenshot your code" : "Screenshot"}
             </span>
             <div className="flex gap-1">
               <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
@@ -112,16 +110,12 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                 <div className="p-3 text-xs bg-black/80 backdrop-blur-md rounded-lg border border-white/10 text-white/90 shadow-lg">
                   {/* Tooltip content */}
                   <div className="space-y-4">
-                    <h3 className="font-medium whitespace-nowrap">
-                      Keyboard Shortcuts
-                    </h3>
+                    <h3 className="font-medium whitespace-nowrap">Keyboard Shortcuts</h3>
                     <div className="space-y-3">
                       {/* Toggle Command */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
-                          <span className="whitespace-nowrap">
-                            Toggle Window
-                          </span>
+                          <span className="whitespace-nowrap">Toggle Window</span>
                           <div className="flex gap-1">
                             <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
                               ⌘
@@ -138,9 +132,7 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                       {/* Screenshot Command */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
-                          <span className="whitespace-nowrap">
-                            Take Screenshot
-                          </span>
+                          <span className="whitespace-nowrap">Take Screenshot</span>
                           <div className="flex gap-1">
                             <span className="bg-white/10 px-1.5 py-0.5 rounded text-[10px] leading-none">
                               ⌘
@@ -151,9 +143,8 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                           </div>
                         </div>
                         <p className="text-[10px] leading-relaxed text-white/70 whitespace-nowrap truncate">
-                          Capture additional parts of the question or your
-                          solution for debugging help. Up to 5 extra screenshots
-                          are saved.
+                          Capture additional parts of the question or your solution for debugging
+                          help. Up to 5 extra screenshots are saved.
                         </p>
                       </div>
                       {/* Debug Command */}
@@ -170,8 +161,7 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
                           </div>
                         </div>
                         <p className="text-[10px] leading-relaxed text-white/70 whitespace-nowrap truncate">
-                          Generate new solutions based on all previous and newly
-                          added screenshots.
+                          Generate new solutions based on all previous and newly added screenshots.
                         </p>
                       </div>
                       {/* Start Over Command */}

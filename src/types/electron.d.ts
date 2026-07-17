@@ -1,10 +1,34 @@
+// Single canonical declaration of the preload bridge surface exposed on
+// `window.electronAPI`. Keep this in sync with electron/preload.ts.
+import type { AppSettings, ShortcutActionId, Binding } from "./settings"
+import type {
+  ShortcutsSnapshot,
+  SetShortcutResult,
+  RegistrationResult,
+  RegistrationReport,
+  ShortcutExport,
+  ImportResult,
+} from "../../electron/shortcuts/types"
+import type { AcceleratorValidation } from "../../electron/shortcuts/validation"
+import type { ModelInfo, ProviderHealth } from "../../electron/llm/providers"
+
+type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
+
 export interface ElectronAPI {
-  updateContentDimensions: (dimensions: {
-    width: number
-    height: number
-  }) => Promise<void>
+  // Window + screenshots
+  updateContentDimensions: (dimensions: { width: number; height: number }) => Promise<void>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>
+  copyToClipboard: (text: string) => Promise<{ ok: boolean; error?: string }>
+  takeScreenshot: () => Promise<void>
+  moveWindowLeft: () => Promise<void>
+  moveWindowRight: () => Promise<void>
+  moveWindowUp: () => Promise<void>
+  moveWindowDown: () => Promise<void>
+  quitApp: () => Promise<void>
+  setMouseIgnore: (ignore: boolean) => void
+
+  // Event subscriptions (return an unsubscribe fn)
   onScreenshotTaken: (callback: (data: { path: string; preview: string }) => void) => () => void
   onSolutionsReady: (callback: (solutions: string) => void) => () => void
   onResetView: (callback: () => void) => () => void
@@ -18,21 +42,93 @@ export interface ElectronAPI {
   onScreenshotAnalysisStream: (callback: (data: any) => void) => () => void
   onUnauthorized: (callback: () => void) => () => void
   onDebugError: (callback: (error: string) => void) => () => void
-  takeScreenshot: () => Promise<void>
-  moveWindowLeft: () => Promise<void>
-  moveWindowRight: () => Promise<void>
-  moveWindowUp: () => Promise<void>
-  moveWindowDown: () => Promise<void>
-  analyzeAudioFromBase64: (data: string, mimeType: string) => Promise<{ text: string; timestamp: number }>
+
+  // Audio / image
+  analyzeAudioFromBase64: (
+    data: string,
+    mimeType: string
+  ) => Promise<{ text: string; timestamp: number }>
   analyzeAudioFile: (path: string) => Promise<{ text: string; timestamp: number }>
-  processScreenshotWithChoice: (analysisType: 'analyze' | 'answer') => Promise<{ success: boolean; error?: string }>
+  getImageBase64: (path: string) => Promise<string>
+  processScreenshotWithChoice: (
+    analysisType: "analyze" | "answer"
+  ) => Promise<{ success: boolean; error?: string }>
   cancelScreenshotProcessing: () => Promise<{ success: boolean; error?: string }>
-  quitApp: () => Promise<void>
-  invoke: (channel: string, ...args: any[]) => Promise<any>
+  onScreenshotError: (callback: (data: { message: string; code?: string }) => void) => () => void
+  getScreenPermission: () => Promise<string>
+  openScreenRecordingSettings: () => Promise<{ ok: boolean }>
+
+  // LLM model management
+  getCurrentLlmConfig: () => Promise<{
+    provider: string
+    model: string
+    isOllama: boolean
+  }>
+  getAvailableOllamaModels: () => Promise<string[]>
+  getOllamaModelsDetailed: () => Promise<Array<{ name: string; vision: boolean }>>
+  getAiProviderModels: (providerId?: string) => Promise<ModelInfo[]>
+  getAiProviderHealth: (providerId?: string) => Promise<ProviderHealth>
+  getAiProvidersHealth: () => Promise<ProviderHealth[]>
+  setAiProviderApiKey: (
+    providerId: string,
+    apiKey: string
+  ) => Promise<{ ok: boolean; error?: string }>
+  getAiProviderSecretStatus: (providerId: string) => Promise<{
+    providerId: string
+    hasApiKey: boolean
+    secureStorageAvailable: boolean
+  }>
+  switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
+  testLlmConnection: (providerId?: string) => Promise<{ success: boolean; error?: string }>
+
+  // Settings
+  getSettings: () => Promise<AppSettings>
+  setSettings: (patch: DeepPartial<AppSettings>) => Promise<AppSettings>
+  resetSettings: (section?: keyof AppSettings) => Promise<AppSettings>
+  exportSettings: () => Promise<unknown>
+  importSettings: (
+    data: unknown
+  ) => Promise<{ ok: boolean; settings?: AppSettings; error?: string }>
+  exportSettingsToFile: () => Promise<{ ok: boolean; filePath?: string; canceled?: boolean }>
+  importSettingsFromFile: () => Promise<{
+    ok: boolean
+    settings?: AppSettings
+    canceled?: boolean
+    error?: string
+  }>
+  onSettingsChanged: (callback: (settings: AppSettings) => void) => () => void
+
+  // Shortcuts
+  getShortcuts: () => Promise<ShortcutsSnapshot>
+  validateShortcut: (
+    accel: string,
+    excludeId?: ShortcutActionId
+  ) => Promise<AcceleratorValidation & { conflictsWith?: string }>
+  setShortcut: (id: ShortcutActionId, accel: Binding) => Promise<SetShortcutResult>
+  resetShortcut: (id: ShortcutActionId) => Promise<RegistrationResult>
+  resetAllShortcuts: () => Promise<RegistrationReport>
+  setMoveStep: (px: number) => Promise<{ ok: boolean; moveStep: number }>
+  exportShortcuts: () => Promise<ShortcutExport>
+  importShortcuts: (data: unknown) => Promise<ImportResult>
+  exportShortcutsToFile: () => Promise<{ ok: boolean; filePath?: string; canceled?: boolean }>
+  importShortcutsFromFile: () => Promise<
+    ImportResult | { ok: false; canceled?: boolean; error?: string }
+  >
+  onShortcutsStatusChanged: (callback: (report: RegistrationReport) => void) => () => void
+
+  /** Streamed local chat. Returns a cancel function. */
+  chatStream: (
+    message: string,
+    handlers: {
+      onToken?: (token: string) => void
+      onDone?: (full: string) => void
+      onError?: (error: string) => void
+    }
+  ) => () => void
 }
 
 declare global {
   interface Window {
     electronAPI: ElectronAPI
   }
-} 
+}

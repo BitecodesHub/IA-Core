@@ -1,5 +1,5 @@
-import React from 'react'
-import CodeBlock from './CodeBlock'
+import React from "react"
+import CodeBlock from "./CodeBlock"
 
 interface MessageRendererProps {
   text: string
@@ -9,7 +9,7 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ text }) => {
   // Parse code blocks with language detection
   const parseMessage = (message: string) => {
     const parts: JSX.Element[] = []
-    
+
     // Regex to match code blocks with optional language
     const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g
     let lastIndex = 0
@@ -27,11 +27,9 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ text }) => {
       }
 
       // Add code block
-      const language = match[1] || 'text'
+      const language = match[1] || "text"
       const code = match[2].trim()
-      parts.push(
-        <CodeBlock key={`code-${match.index}`} code={code} language={language} />
-      )
+      parts.push(<CodeBlock key={`code-${match.index}`} code={code} language={language} />)
 
       lastIndex = match.index + match[0].length
     }

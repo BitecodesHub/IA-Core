@@ -1,4 +1,4 @@
 export interface AudioResult {
-  text: string;
-  timestamp: number;
-} 
+  text: string
+  timestamp: number
+}

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import MessageRenderer from './MessageRenderer'
+import React, { useState } from "react"
+import MessageRenderer from "./MessageRenderer"
 
 interface ThinkingAnswerRendererProps {
   text: string
@@ -13,7 +13,7 @@ const ThinkingAnswerRenderer: React.FC<ThinkingAnswerRendererProps> = ({ text })
     // Try to match THINKING and ANSWER sections (case insensitive)
     const thinkingRegex = /THINKING:\s*([\s\S]*?)(?=ANSWER:|$)/i
     const answerRegex = /ANSWER:\s*([\s\S]*?)$/i
-    
+
     const thinkingMatch = response.match(thinkingRegex)
     const answerMatch = response.match(answerRegex)
 
@@ -27,7 +27,7 @@ const ThinkingAnswerRenderer: React.FC<ThinkingAnswerRendererProps> = ({ text })
     // If only THINKING found (no ANSWER section yet)
     if (thinkingMatch && !answerMatch) {
       const thinking = thinkingMatch[1].trim()
-      return { thinking, answer: '', hasStructure: true }
+      return { thinking, answer: "", hasStructure: true }
     }
 
     // If only ANSWER found (no THINKING section)
@@ -61,12 +61,17 @@ const ThinkingAnswerRenderer: React.FC<ThinkingAnswerRendererProps> = ({ text })
               <span>Thinking Process</span>
             </span>
             <svg
-              className={`w-4 h-4 text-white/70 transition-transform ${showThinking ? 'rotate-180' : ''}`}
+              className={`w-4 h-4 text-white/70 transition-transform ${showThinking ? "rotate-180" : ""}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 9l-7 7-7-7"
+              />
             </svg>
           </button>
           {showThinking && (

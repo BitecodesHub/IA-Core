@@ -44,6 +44,13 @@ jspm_packages/
 dist-electron/
 dist/
 
+# Electron-builder output (packaged .app/.dmg — large binaries that also embed
+# any baked-in secrets; never commit these).
+release/
+
+# Local-only secret override (never commit real API keys).
+electron/config/staticKeys.local.ts
+
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
 

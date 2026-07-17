@@ -18,7 +18,7 @@ const ScreenshotItem: React.FC<ScreenshotItemProps> = ({
   screenshot,
   onDelete,
   index,
-  isLoading
+  isLoading,
 }) => {
   const handleDelete = async () => {
     await onDelete(index)
@@ -26,9 +26,7 @@ const ScreenshotItem: React.FC<ScreenshotItemProps> = ({
 
   return (
     <>
-      <div
-        className={`border border-white relative ${isLoading ? "" : "group"}`}
-      >
+      <div className={`border border-white relative ${isLoading ? "" : "group"}`}>
         <div className="w-full h-full relative">
           {isLoading && (
             <div className="absolute inset-0 bg-black bg-opacity-50 z-10 flex items-center justify-center">

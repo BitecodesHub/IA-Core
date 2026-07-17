@@ -1,187 +1,61 @@
-# Production Ready Checklist ✅
+# Production Refactor — Status
 
-## Completed Improvements
+This file tracks the production-grade refactor. It replaces an earlier,
+aspirational checklist that overstated the project's state.
 
-### 🛡️ Error Handling
-- ✅ **Error Boundary Component** - Catches and displays React errors gracefully
-- ✅ **Query Error Handling** - Retry logic with exponential backoff (3 retries, 1s delay)
-- ✅ **User-Friendly Error Messages** - Clear error states with actionable feedback
-- ✅ **Fallback UI** - Graceful degradation when components fail
+## Done & verified (typecheck + lint + `npm run build` + `npm test`)
 
-### 🔧 Configuration Management
-- ✅ **Environment Configuration** - Centralized config in `src/config/environment.ts`
-- ✅ **Feature Flags** - Debug logs disabled in production
-- ✅ **Constants** - All magic numbers extracted to config
-- ✅ **Logging Utility** - Structured logging with levels (debug, info, warn, error)
+### Foundation
+- **Settings persistence** (`electron/config/`): atomic JSON at
+  `userData/settings.json`, value coercion/validation, versioned migrations,
+  corrupt-file recovery, debounced writes, live change events. Settings survive
+  restarts and apply without a restart.
+- **Configurable shortcuts** (`electron/shortcuts/` + Settings → Shortcuts):
+  typed action registry, accelerator validation, in-app vs OS conflict
+  detection, live re-registration, disable/reset, import/export. Fixed the
+  window-move `step = 0` no-op.
+- **Provider-aware AI** (`electron/LLMHelper.ts`, `electron/llm/providers.ts`):
+  Ollama plus OpenAI-compatible profiles, low/high/vision model roles,
+  Auto/Low/High routing, dynamic model discovery, capability flags, health
+  checks, retries, timeouts, cancellation, runtime switching, secure API-key
+  storage, and graceful fallback.
+- **Security/lifecycle**: `nodeIntegration:false` + `sandbox:true`,
+  path-traversal guards on file IPC, navigation/popup blocking, single-instance
+  lock, graceful settings flush, multi-monitor bounds clamping, screenshot
+  capture mutex + guaranteed temp-file cleanup, remote provider opt-in, and
+  settings export without secrets.
+- **Build/tooling**: added `vite.config.ts`, the build now compiles the Electron
+  main process, removed the duplicate lockfile and the deprecated
+  `@types/electron`, ESLint + Prettier, `typecheck`/`lint`/`format`/`test`
+  scripts, neutral app identity.
 
-### 🚀 Performance Optimizations
-- ✅ **Smart Auto-Scroll** - Only scrolls when user is near bottom
-- ✅ **Query Optimization** - Proper stale time and cache configuration
-- ✅ **Removed Debug Logs** - Production builds are clean
-- ✅ **Lazy Loading** - Components load on demand
+### UI / UX
+- In-app **Settings panel** with General / AI / Shortcuts / Window / Privacy /
+  Diagnostics sections, search, settings import/export, restore defaults, and
+  live updates.
+- **Global and local shortcuts** with press-to-record capture, local/global
+  duplicate prevention, reserved shortcut warnings, category filters, search,
+  disable/reset, and persistence.
+- **Theme support** for Dark, Light, and System, applied live.
+- Chat streaming now follows the bottom; react-query caching made sane; removed a
+  duplicate IPC listener and dead `ModelSelector` code.
 
-### 🎨 UI/UX Improvements
-- ✅ **Loading States** - LoadingSpinner component for async operations
-- ✅ **Error States** - Clear error messages with retry options
-- ✅ **Responsive Design** - Works on different screen sizes
-- ✅ **Accessibility** - Proper ARIA labels and keyboard navigation
+### Tests
+- Vitest unit tests for settings coercion, provider privacy gates, migrations,
+  deep-merge/diff, model routing, parsing, and shortcut validation/conflict
+  detection (79 tests passing).
 
-### 🧹 Code Quality
-- ✅ **Removed Unused Imports** - Clean codebase
-- ✅ **TypeScript Strict Mode** - Type safety throughout
-- ✅ **No Console Logs** - Production builds are clean
-- ✅ **Consistent Naming** - Clear variable and function names
+## Remaining
 
-### 🔒 Security
-- ✅ **Input Validation** - Proper error handling for user inputs
-- ✅ **Safe API Calls** - Try-catch blocks around all async operations
-- ✅ **No Sensitive Data Logging** - Credentials never logged
+- **Renderer decomposition**: `Queue/Solutions/Debug` are still large; split into
+  hooks/components.
+- **Packaging**: generate icon binaries (`assets/README.md`) for `npm run dist`.
+- **E2E**: Playwright/Electron smoke tests.
 
-## Build Configuration
+## Verify
 
-### Development Build
 ```bash
-npm run start
+npm run typecheck   # both renderer and main
+npm test            # unit tests
+npm run build       # full production build
 ```
-- Hot reload enabled
-- Debug logs visible
-- Source maps included
-
-### Production Build
-```bash
-npm run dist
-```
-- Minified code
-- No debug logs
-- Optimized bundle size
-- Platform-specific installers
-
-## Environment Variables
-
-Required in `.env`:
-```env
-# For Gemini (Cloud AI)
-GEMINI_API_KEY=your_api_key_here
-
-# For Ollama (Local AI)
-USE_OLLAMA=true
-OLLAMA_MODEL=llama3.2
-OLLAMA_URL=http://localhost:11434
-```
-
-## Testing Checklist
-
-### Before Release
-- [ ] Test on Windows 10/11
-- [ ] Test on macOS (Intel & Apple Silicon)
-- [ ] Test on Ubuntu/Linux
-- [ ] Test screenshot capture
-- [ ] Test AI analysis (both Ollama and Gemini)
-- [ ] Test chat functionality
-- [ ] Test voice recording
-- [ ] Test model switching
-- [ ] Test keyboard shortcuts
-- [ ] Test error scenarios
-- [ ] Test with slow network
-- [ ] Test with Ollama offline
-- [ ] Test memory usage over time
-- [ ] Test with multiple screenshots
-
-### Performance Benchmarks
-- [ ] App starts in < 3 seconds
-- [ ] Screenshot capture < 1 second
-- [ ] UI responds in < 100ms
-- [ ] Memory usage < 500MB
-- [ ] No memory leaks after 1 hour
-
-## Deployment
-
-### Automated Build
-```bash
-# Clean build
-npm run clean
-
-# Install dependencies
-npm install
-
-# Build for production
-npm run dist
-```
-
-### Output Locations
-- **Windows**: `release/Meeting Notes Coder Setup.exe`
-- **macOS**: `release/Meeting Notes Coder.dmg`
-- **Linux**: `release/Meeting Notes Coder.AppImage`
-
-## Monitoring
-
-### Error Tracking
-- Console errors are logged with context
-- Ready for integration with Sentry/LogRocket
-- Error boundary catches React errors
-
-### Performance Monitoring
-- Query performance tracked
-- Screenshot processing time logged
-- Memory usage can be monitored
-
-## Known Limitations
-
-1. **Ollama Required** - Local AI requires Ollama installation
-2. **Vision Models** - Not all Ollama models support image analysis
-3. **Platform Specific** - Some features may vary by OS
-4. **Network Dependent** - Gemini requires internet connection
-
-## Future Improvements
-
-### High Priority
-- [ ] Add telemetry/analytics
-- [ ] Implement crash reporting
-- [ ] Add auto-update mechanism
-- [ ] Create user onboarding flow
-
-### Medium Priority
-- [ ] Add settings persistence
-- [ ] Implement chat history export
-- [ ] Add screenshot annotation
-- [ ] Support more AI providers
-
-### Low Priority
-- [ ] Dark/light theme toggle
-- [ ] Custom keyboard shortcuts
-- [ ] Plugin system
-- [ ] Multi-language support
-
-## Support
-
-### Common Issues
-
-**Issue**: App won't start
-- **Solution**: Check if port 5180 is available
-- **Solution**: Restart Electron process
-
-**Issue**: Screenshot analysis fails
-- **Solution**: Verify Ollama is running
-- **Solution**: Check vision model is installed
-- **Solution**: Verify API key for Gemini
-
-**Issue**: High memory usage
-- **Solution**: Clear screenshot queue
-- **Solution**: Restart application
-
-## Version History
-
-### v1.0.0 (Current)
-- Initial production release
-- Screenshot analysis with AI
-- Chat functionality
-- Voice recording
-- Multi-model support
-- Cross-platform support
-
----
-
-**Status**: ✅ PRODUCTION READY
-
-**Last Updated**: 2024
-**Maintainer**: Development Team

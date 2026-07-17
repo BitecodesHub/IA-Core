@@ -16,6 +16,19 @@
   --glass-border: rgba(255, 255, 255, 0.1);
 }
 
+:root[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f7f9;
+  --bg-tertiary: #eceff3;
+  --text-primary: #101418;
+  --text-secondary: #2c3440;
+  --text-muted: #627083;
+  --border-primary: rgba(16, 20, 24, 0.14);
+  --border-secondary: rgba(16, 20, 24, 0.08);
+  --glass-bg: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(16, 20, 24, 0.14);
+}
+
 /* Global Dark Theme */
 * {
   box-sizing: border-box;
@@ -255,6 +268,10 @@ button:disabled {
   background-color: var(--bg-secondary) !important;
 }
 
+.bg-black {
+  background-color: var(--bg-primary) !important;
+}
+
 .bg-gray-100 {
   background-color: var(--bg-tertiary) !important;
 }
@@ -358,4 +375,19 @@ button:disabled {
 input[type="text"], input:not([type]) {
   color: #ffffff !important;
   -webkit-text-fill-color: #ffffff !important;
+  caret-color: #ffffff !important;
+}
+
+/* Chromium autofill paints its OWN dark -webkit-text-fill-color and a light
+   background that ordinary `input` rules cannot override — you must target the
+   :-webkit-autofill pseudo-class. This keeps autofilled/typed input text white. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill {
+  -webkit-text-fill-color: #ffffff !important;
+  caret-color: #ffffff !important;
+  -webkit-box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.05) inset !important;
+  transition: background-color 5000s ease-in-out 0s;
 }

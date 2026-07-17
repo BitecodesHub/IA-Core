@@ -1,16 +1,17 @@
 // Debug.tsx
 import React, { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "react-query"
+import { QUERY_STALE_TIME, QUERY_CACHE_TIME } from "../config/environment"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { dracula } from "react-syntax-highlighter/dist/esm/styles/prism"
-import { ComplexitySection, ContentSection } from "./Solutions"
+import { ComplexitySection, ContentSection } from "../components/Solutions/ContentSection"
 import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
 import {
   Toast,
   ToastDescription,
   ToastMessage,
   ToastTitle,
-  ToastVariant
+  ToastVariant,
 } from "../components/ui/toast"
 import ExtraScreenshotsQueueHelper from "../components/Solutions/SolutionCommands"
 import { diffLines } from "diff"
@@ -21,18 +22,10 @@ type DiffLine = {
   removed?: boolean
 }
 
-const syntaxHighlighterStyles = {
-  ".syntax-line": {
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-word",
-    overflowWrap: "break-word"
-  }
-} as const
-
 const CodeComparisonSection = ({
   oldCode,
   newCode,
-  isLoading
+  isLoading,
 }: {
   oldCode: string | null
   newCode: string | null
@@ -55,7 +48,7 @@ const CodeComparisonSection = ({
     // Generate the diff
     const diff = diffLines(normalizedOldCode, normalizedNewCode, {
       newlineIsToken: true,
-      ignoreWhitespace: true // Changed to true to better handle whitespace differences
+      ignoreWhitespace: true, // Changed to true to better handle whitespace differences
     })
 
     // Process the diff to create parallel arrays
@@ -73,7 +66,7 @@ const CodeComparisonSection = ({
             .filter((line) => line.length > 0)
             .map((line) => ({
               value: line,
-              added: true
+              added: true,
             }))
         )
       } else if (part.removed) {
@@ -84,7 +77,7 @@ const CodeComparisonSection = ({
             .filter((line) => line.length > 0)
             .map((line) => ({
               value: line,
-              removed: true
+              removed: true,
             }))
         )
         // Add empty lines to right side
@@ -104,9 +97,7 @@ const CodeComparisonSection = ({
 
   return (
     <div className="space-y-1.5">
-      <h2 className="text-[13px] font-medium text-white tracking-wide">
-        Code Comparison
-      </h2>
+      <h2 className="text-[13px] font-medium text-white tracking-wide">Code Comparison</h2>
       {isLoading ? (
         <div className="space-y-1">
           <div className="mt-3 flex">
@@ -120,9 +111,7 @@ const CodeComparisonSection = ({
           {/* Previous Code */}
           <div className="w-1/2 border-r border-gray-700">
             <div className="bg-[#2d333b] px-3 py-1.5">
-              <h3 className="text-[11px] font-medium text-gray-200">
-                Previous Version
-              </h3>
+              <h3 className="text-[11px] font-medium text-gray-200">Previous Version</h3>
             </div>
             <div className="p-3 overflow-x-auto">
               <SyntaxHighlighter
@@ -133,7 +122,7 @@ const CodeComparisonSection = ({
                   margin: 0,
                   padding: "1rem",
                   whiteSpace: "pre-wrap",
-                  wordBreak: "break-all"
+                  wordBreak: "break-all",
                 }}
                 wrapLines={true}
                 showLineNumbers={true}
@@ -142,10 +131,8 @@ const CodeComparisonSection = ({
                   return {
                     style: {
                       display: "block",
-                      backgroundColor: line?.removed
-                        ? "rgba(139, 0, 0, 0.2)"
-                        : "transparent"
-                    }
+                      backgroundColor: line?.removed ? "rgba(139, 0, 0, 0.2)" : "transparent",
+                    },
                   }
                 }}
               >
@@ -157,9 +144,7 @@ const CodeComparisonSection = ({
           {/* New Code */}
           <div className="w-1/2">
             <div className="bg-[#2d333b] px-3 py-1.5">
-              <h3 className="text-[11px] font-medium text-gray-200">
-                New Version
-              </h3>
+              <h3 className="text-[11px] font-medium text-gray-200">New Version</h3>
             </div>
             <div className="p-3 overflow-x-auto">
               <SyntaxHighlighter
@@ -170,7 +155,7 @@ const CodeComparisonSection = ({
                   margin: 0,
                   padding: "1rem",
                   whiteSpace: "pre-wrap",
-                  wordBreak: "break-all"
+                  wordBreak: "break-all",
                 }}
                 wrapLines={true}
                 showLineNumbers={true}
@@ -179,10 +164,8 @@ const CodeComparisonSection = ({
                   return {
                     style: {
                       display: "block",
-                      backgroundColor: line?.added
-                        ? "rgba(0, 139, 0, 0.2)"
-                        : "transparent"
-                    }
+                      backgroundColor: line?.added ? "rgba(0, 139, 0, 0.2)" : "transparent",
+                    },
                   }
                 }}
               >
@@ -208,18 +191,14 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
   const [oldCode, setOldCode] = useState<string | null>(null)
   const [newCode, setNewCode] = useState<string | null>(null)
   const [thoughtsData, setThoughtsData] = useState<string[] | null>(null)
-  const [timeComplexityData, setTimeComplexityData] = useState<string | null>(
-    null
-  )
-  const [spaceComplexityData, setSpaceComplexityData] = useState<string | null>(
-    null
-  )
+  const [timeComplexityData, setTimeComplexityData] = useState<string | null>(null)
+  const [spaceComplexityData, setSpaceComplexityData] = useState<string | null>(null)
 
   const [toastOpen, setToastOpen] = useState(false)
   const [toastMessage, setToastMessage] = useState<ToastMessage>({
     title: "",
     description: "",
-    variant: "neutral"
+    variant: "neutral",
   })
 
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
@@ -236,15 +215,13 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
         return []
       }
     },
-    staleTime: Infinity,
-    cacheTime: Infinity
+    staleTime: QUERY_STALE_TIME,
+    cacheTime: QUERY_CACHE_TIME,
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
   })
 
-  const showToast = (
-    title: string,
-    description: string,
-    variant: ToastVariant
-  ) => {
+  const showToast = (title: string, description: string, variant: ToastVariant) => {
     setToastMessage({ title, description, variant })
     setToastOpen(true)
   }
@@ -253,9 +230,7 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
     const screenshotToDelete = extraScreenshots[index]
 
     try {
-      const response = await window.electronAPI.deleteScreenshot(
-        screenshotToDelete.path
-      )
+      const response = await window.electronAPI.deleteScreenshot(screenshotToDelete.path)
 
       if (response.success) {
         refetch()
@@ -298,14 +273,10 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
         setIsProcessing(true)
       }),
       window.electronAPI.onDebugError((error: string) => {
-        showToast(
-          "Processing Failed",
-          "There was an error debugging your code.",
-          "error"
-        )
+        showToast("Processing Failed", "There was an error debugging your code.", "error")
         setIsProcessing(false)
         console.error("Processing error:", error)
-      })
+      }),
     ]
 
     // Set up resize observer
@@ -318,7 +289,7 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
         }
         window.electronAPI.updateContentDimensions({
           width: contentWidth,
-          height: contentHeight
+          height: contentHeight,
         })
       }
     }
@@ -341,7 +312,7 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
   }
 
   return (
-    <div ref={contentRef} className="relative space-y-3 px-4 py-3 ">
+    <div ref={contentRef} className="relative space-y-3 px-4 py-3 " data-overlay-interactive>
       <Toast
         open={toastOpen}
         onOpenChange={setToastOpen}

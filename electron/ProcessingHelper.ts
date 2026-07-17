@@ -2,13 +2,13 @@
 
 import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
-import dotenv from "dotenv"
+import { AudioService } from "./audio/AudioService"
+import { SettingsService } from "./config/SettingsService"
+import sharp from "sharp"
 
-dotenv.config()
-
+// Stealth: screenshot file paths embed the OS username (via userData). Keep them
+// out of production logs.
 const isDev = process.env.NODE_ENV === "development"
-const isDevTest = process.env.IS_DEV_TEST === "true"
-const MOCK_API_WAIT_TIME = Number(process.env.MOCK_API_WAIT_TIME) || 500
 
 export class ProcessingHelper {
   private appState: AppState
@@ -18,23 +18,8 @@ export class ProcessingHelper {
 
   constructor(appState: AppState) {
     this.appState = appState
-    
-    // Check if user wants to use Ollama
-    const useOllama = process.env.USE_OLLAMA === "true"
-    const ollamaModel = process.env.OLLAMA_MODEL // Don't set default here, let LLMHelper auto-detect
-    const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434"
-    
-    if (useOllama) {
-      console.log("[ProcessingHelper] Initializing with Ollama")
-      this.llmHelper = new LLMHelper(undefined, true, ollamaModel, ollamaUrl)
-    } else {
-      const apiKey = process.env.GEMINI_API_KEY
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY not found in environment variables. Set GEMINI_API_KEY or enable Ollama with USE_OLLAMA=true")
-      }
-      console.log("[ProcessingHelper] Initializing with Gemini")
-      this.llmHelper = new LLMHelper(apiKey, false)
-    }
+    // Local-only: the provider reads endpoint/model/params live from settings.
+    this.llmHelper = new LLMHelper()
   }
 
   public async processScreenshots(): Promise<void> {
@@ -51,36 +36,48 @@ export class ProcessingHelper {
       }
 
       // Check if last screenshot is an audio file
-      const allPaths = this.appState.getScreenshotHelper().getScreenshotQueue();
-      const lastPath = allPaths[allPaths.length - 1];
-      if (lastPath.endsWith('.mp3') || lastPath.endsWith('.wav')) {
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START);
-        this.appState.setView('solutions');
+      const allPaths = this.appState.getScreenshotHelper().getScreenshotQueue()
+      const lastPath = allPaths[allPaths.length - 1]
+      if (lastPath.endsWith(".mp3") || lastPath.endsWith(".wav")) {
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
+        this.appState.setView("solutions")
         try {
-          const audioResult = await this.llmHelper.analyzeAudioFile(lastPath);
-          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, audioResult);
-          this.appState.setProblemInfo({ problem_statement: audioResult.text, input_format: {}, output_format: {}, constraints: [], test_cases: [] });
-          return;
+          const audioResult = await this.processAudioFile(lastPath)
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
+            audioResult
+          )
+          this.appState.setProblemInfo({
+            problem_statement: audioResult.text,
+            input_format: {},
+            output_format: {},
+            constraints: [],
+            test_cases: [],
+          })
+          return
         } catch (err: any) {
-          console.error('Audio processing error:', err);
-          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, err.message);
-          return;
+          console.error("Audio processing error:", err)
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+            err.message
+          )
+          return
         }
       }
 
       // NEW: Handle screenshot - show popup instead of direct analysis
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
       this.appState.setView("solutions")
-      
+
       // Instead of processing immediately, let the frontend show the popup
       // The actual processing will be triggered by the popup choice
-      console.log("[ProcessingHelper] Screenshot ready for analysis, waiting for user choice");
-      return;
+      if (isDev) console.log("[ProcessingHelper] Screenshot ready for analysis, waiting for user choice")
+      return
     } else {
       // Debug mode
       const extraScreenshotQueue = this.appState.getScreenshotHelper().getExtraScreenshotQueue()
       if (extraScreenshotQueue.length === 0) {
-        console.log("No extra screenshots to process")
+        if (isDev) console.log("No extra screenshots to process")
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
         return
       }
@@ -95,29 +92,29 @@ export class ProcessingHelper {
           throw new Error("No problem info available")
         }
 
-        // Get current solution from state
-        const currentSolution = await this.llmHelper.generateSolution(problemInfo)
+        // Get current solution from state (cancellable via the reset shortcut)
+        const signal = this.currentExtraProcessingAbortController?.signal
+        const currentSolution = await this.llmHelper.generateSolution(problemInfo, signal)
+        if (signal?.aborted) return
         const currentCode = currentSolution.solution.code
 
         // Debug the solution using vision model
         const debugResult = await this.llmHelper.debugSolutionWithImages(
           problemInfo,
           currentCode,
-          extraScreenshotQueue
+          extraScreenshotQueue,
+          signal
         )
 
+        // If cancelled mid-flight, generateSolution/debugSolutionWithImages swallow the
+        // "Request cancelled" error into a placeholder fallback; do NOT broadcast that
+        // as a success (it would cache and later show bogus placeholder content).
+        if (signal?.aborted) return
         this.appState.setHasDebugged(true)
-        mainWindow.webContents.send(
-          this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
-          debugResult
-        )
-
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS, debugResult)
       } catch (error: any) {
         console.error("Debug processing error:", error)
-        mainWindow.webContents.send(
-          this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
-          error.message
-        )
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_ERROR, error.message)
       } finally {
         this.currentExtraProcessingAbortController = null
       }
@@ -139,532 +136,251 @@ export class ProcessingHelper {
   }
 
   public async processAudioBase64(data: string, mimeType: string) {
-    // Directly use LLMHelper to analyze inline base64 audio
-    return this.llmHelper.analyzeAudioFromBase64(data, mimeType);
+    return this.handleAudio(() => AudioService.getInstance().transcribeBase64(data, mimeType))
   }
 
-  // Add audio file processing method
   public async processAudioFile(filePath: string) {
-    return this.llmHelper.analyzeAudioFile(filePath);
+    return this.handleAudio(() => AudioService.getInstance().transcribeFile(filePath))
+  }
+
+  /**
+   * Local transcription, then (optionally) a local Ollama analysis of the
+   * transcript. Fully offline; degrades to a clear message if the STT engine or
+   * a model is unavailable.
+   */
+  private async handleAudio(
+    run: () => Promise<{ text: string; timestamp: number }>
+  ): Promise<{ text: string; timestamp: number }> {
+    try {
+      const { text } = await run()
+      if (!text) return { text: "No speech detected in the audio.", timestamp: Date.now() }
+
+      const audioCfg = SettingsService.getInstance().get("audio")
+      if (!audioCfg.autoAnalyze) return { text, timestamp: Date.now() }
+
+      try {
+        const analysis = await this.llmHelper.chat(
+          `The following is a transcript of an audio clip. Summarize it briefly and suggest possible next actions.\n\nTranscript:\n${text}`
+        )
+        return { text: `Transcript:\n${text}\n\n${analysis}`, timestamp: Date.now() }
+      } catch {
+        // Transcription succeeded but analysis failed (e.g. Ollama offline).
+        return { text: `Transcript:\n${text}`, timestamp: Date.now() }
+      }
+    } catch (error: any) {
+      return { text: `Audio processing failed: ${error?.message ?? error}`, timestamp: Date.now() }
+    }
   }
 
   public getLLMHelper() {
-    return this.llmHelper;
+    return this.llmHelper
   }
 
   // New method to handle screenshot analysis with user choice
-  public async processScreenshotWithChoice(analysisType: 'analyze' | 'answer'): Promise<void> {
+  public async processScreenshotWithChoice(analysisType: "analyze" | "answer"): Promise<void> {
     const mainWindow = this.appState.getMainWindow()
     if (!mainWindow) return
 
     const screenshotQueue = this.appState.getScreenshotHelper().getScreenshotQueue()
-    
-    console.log('[ProcessingHelper] processScreenshotWithChoice called');
-    console.log('[ProcessingHelper] Current queue length:', screenshotQueue.length);
-    console.log('[ProcessingHelper] Queue contents:', screenshotQueue);
-    
+
+    if (isDev) {
+      console.log("[ProcessingHelper] processScreenshotWithChoice called")
+      console.log("[ProcessingHelper] Current queue length:", screenshotQueue.length)
+      // "Queue contents" logs full screenshot paths (embed the OS username) — dev only.
+      console.log("[ProcessingHelper] Queue contents:", screenshotQueue)
+    }
+
     if (screenshotQueue.length === 0) {
-      console.log('[ProcessingHelper] No screenshots in queue');
+      if (isDev) console.log("[ProcessingHelper] No screenshots in queue")
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
       return
     }
 
     // Always get the LATEST screenshot (last in queue)
-    const lastPath = screenshotQueue[screenshotQueue.length - 1];
-    
-    console.log('[ProcessingHelper] Selected screenshot for analysis:', lastPath);
-    console.log('[ProcessingHelper] Analysis type:', analysisType);
-    
+    const lastPath = screenshotQueue[screenshotQueue.length - 1]
+
+    if (isDev) {
+      console.log("[ProcessingHelper] Selected screenshot for analysis:", lastPath)
+      console.log("[ProcessingHelper] Analysis type:", analysisType)
+    }
+
     this.currentProcessingAbortController = new AbortController()
-    
+
     try {
       // Test connection first
-      const connectionTest = await this.llmHelper.testConnection();
+      const connectionTest = await this.llmHelper.testConnection()
       if (!connectionTest.success) {
-        throw new Error(`LLM connection failed: ${connectionTest.error}`);
+        throw new Error(`LLM connection failed: ${connectionTest.error}`)
       }
-      
-      // Check if model supports vision
-      if (this.llmHelper.isUsingOllama() && !this.llmHelper.supportsVision()) {
-        throw new Error(`Current model '${this.llmHelper.getCurrentModel()}' doesn't support image analysis. Please install a vision model like 'llava' or 'llama3.2-vision'.`);
-      }
-      
+
+      // Resolve a vision-capable model now (self-heals if capabilities aren't cached yet).
+      // Throws a clear, actionable error if none is installed.
+      await this.llmHelper.ensureVisionModel()
+
       // Start streaming analysis and send updates to Solutions view
-      await this.streamImageAnalysisToSolutions(lastPath, mainWindow, analysisType);
-      
+      await this.streamImageAnalysisToSolutions(lastPath, mainWindow, analysisType)
     } catch (error: any) {
-      console.error("Image processing error:", error);
-      
-      // Provide more helpful error messages
-      let errorMessage = error.message;
-      if (error.message.includes('timed out')) {
-        errorMessage = "Image analysis is taking too long. This might be because:\n• The model is still loading\n• The image is too complex\n• Ollama is not responding\n\nTry again or check your Ollama installation.";
-      } else if (error.message.includes('vision model') || error.message.includes("doesn't support image")) {
-        errorMessage = `${error.message}\n\nTo install a vision model, run:\nollama pull llava\n\nThen restart the application.`;
-      } else if (error.message.includes('connection failed')) {
-        errorMessage = `${error.message}\n\nMake sure Ollama is running:\n1. Start Ollama: ollama serve\n2. Install a model: ollama pull llava\n3. Restart this application`;
+      console.error("Image processing error:", error)
+
+      // Remediation depends on the active provider: online (OpenRouter) failures
+      // must not tell the user to fix Ollama, and vice versa.
+      const usingOllama = this.llmHelper.isUsingOllama()
+      let errorMessage = error.message
+      if (error.message.includes("timed out")) {
+        errorMessage = usingOllama
+          ? "Image analysis is taking too long. This might be because:\n• The model is still loading\n• The image is too complex\n• Ollama is not responding\n\nTry again or check your Ollama installation."
+          : "Image analysis timed out. Check your network connection and try again."
+      } else if (
+        error.message.includes("vision model") ||
+        error.message.includes("doesn't support image")
+      ) {
+        errorMessage = usingOllama
+          ? `${error.message}\n\nTo install a vision model, run:\nollama pull llava\n\nThen restart the application.`
+          : `${error.message}\n\nChoose a vision-capable model in Settings › Models.`
+      } else if (
+        error.message.includes("connection failed") ||
+        error.message.includes("API key")
+      ) {
+        errorMessage = usingOllama
+          ? `${error.message}\n\nMake sure Ollama is running:\n1. Start Ollama: ollama serve\n2. Install a model: ollama pull llava\n3. Restart this application`
+          : `${error.message}\n\nAdd or check your OpenRouter API key in Settings › Models.`
       }
-      
-      mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, errorMessage);
+
+      mainWindow.webContents.send(
+        this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+        errorMessage
+      )
     } finally {
-      this.currentProcessingAbortController = null;
+      this.currentProcessingAbortController = null
     }
   }
 
-  private async streamImageAnalysisToSolutions(imagePath: string, mainWindow: any, analysisType: 'analyze' | 'answer' = 'analyze') {
+  private async streamImageAnalysisToSolutions(
+    imagePath: string,
+    mainWindow: any,
+    analysisType: "analyze" | "answer" = "analyze"
+  ) {
     try {
       // Verify file exists and get stats
-      const fs = require('fs');
-      const path = require('path');
-      
-      // Log the screenshot being processed
-      console.log('[ProcessingHelper] Processing screenshot:', imagePath);
-      
-      const stats = await fs.promises.stat(imagePath);
-      const fileModifiedTime = stats.mtime;
-      const fileSize = stats.size;
-      
-      console.log('[ProcessingHelper] Screenshot details:', {
-        path: imagePath,
-        modifiedTime: fileModifiedTime.toISOString(),
-        size: fileSize,
-        basename: path.basename(imagePath)
-      });
-      
-      // Read and encode image as base64 (fresh read, no caching)
-      // Use a timestamp to ensure no caching at any level
-      const imageData = await fs.promises.readFile(imagePath);
-      const base64Image = imageData.toString('base64');
-      
-      console.log('[ProcessingHelper] Image read successfully, base64 length:', base64Image.length);
-      
-      // Get current model from LLMHelper
-      const currentModel = this.llmHelper.getCurrentModel();
-      
-      // Different prompts based on analysis type
+      const fs = require("fs")
+      const path = require("path")
+
+      // Log the screenshot being processed (dev only — path embeds the username).
+      if (isDev) console.log("[ProcessingHelper] Processing screenshot:", imagePath)
+
+      const stats = await fs.promises.stat(imagePath)
+      const fileModifiedTime = stats.mtime
+      const fileSize = stats.size
+
+      if (isDev)
+        console.log("[ProcessingHelper] Screenshot details:", {
+          path: imagePath,
+          modifiedTime: fileModifiedTime.toISOString(),
+          size: fileSize,
+          basename: path.basename(imagePath),
+        })
+
+      // Resize the screenshot before encoding — raw Retina PNGs can be 4-8 MB.
+      // Downsampling to 1280 px wide JPEG (q85) reduces payload to ~150-350 KB,
+      // which speeds up vision-model inference significantly without losing text legibility.
+      const resized = await sharp(imagePath)
+        .resize({ width: 1536, withoutEnlargement: true })
+        .jpeg({ quality: 92 })
+        .toBuffer()
+      const base64Image = resized.toString("base64")
+
+      if (isDev)
+        console.log(
+          `[ProcessingHelper] Image resized: ${fileSize} bytes → ${resized.length} bytes (${Math.round((resized.length / fileSize) * 100)}%)`
+        )
+
+      // Grounded, adaptive prompts. The previous "answer" prompt forced a
+      // competitive-programming solution onto EVERY screenshot, so a plain note
+      // ("What is java") made the model fabricate a coding problem. These prompts
+      // read what is actually present first, then respond to the real content and
+      // explicitly forbid inventing details that are not visible.
       const prompts = {
-        analyze: "Analyze this screenshot image in detail. Describe what you see, identify any text, UI elements, problems, or important information. Be comprehensive and helpful.",
-        answer: `You are a world-class competitive programmer (Codeforces Grandmaster, Google Code Jam finalist). Analyze this screenshot with surgical precision.
+        analyze: `You are a precise image-analysis assistant. Follow these steps:
+1. FIRST, read every single word, number, symbol, and code snippet visible in the screenshot character by character. Do not skip or paraphrase anything.
+2. THEN, describe exactly what you see: the text content, code, UI elements, error messages, or diagrams.
+3. Do NOT invent, assume, or hallucinate anything that is not literally visible on screen.
+4. If any text is partially obscured or unclear, say so explicitly.
 
-╔═══════════════════════════════════════════════════════════════════╗
-║                    PHASE 1: SCREENSHOT ANALYSIS                    ║
-╚═══════════════════════════════════════════════════════════════════╝
+Be thorough and precise.`,
 
-Read the screenshot systematically:
+        answer: `You are an expert exam-solver. Follow these steps EXACTLY:
 
-1️⃣ EXTRACT PROBLEM STATEMENT:
-   • Read EVERY word carefully - miss nothing
-   • Identify the core task/goal
-   • Note any story/context provided
+STEP 1 — READ: Carefully read every single word, option, number, and symbol visible in this screenshot. Pay attention to exact wording, punctuation, and spelling.
 
-2️⃣ LANGUAGE DETECTION (CRITICAL - Multiple verification methods):
-   
-   Method A - Explicit Indicators:
-   ✓ Language name mentioned? (Python, Java, C++, JavaScript, C, Go, Rust, TypeScript, etc.)
-   ✓ File extension visible? (.py, .java, .cpp, .js, .c, .go, .rs, .ts)
-   ✓ Platform/IDE hints? (LeetCode defaults, HackerRank, Codeforces)
-   
-   Method B - Syntax Analysis:
-   ✓ Function definition style: def (Python), function (JS), public static (Java), auto (C++)
-   ✓ Print statements: print() (Python), System.out (Java), cout (C++), console.log (JS)
-   ✓ Variable declarations: no keyword (Python), var/let/const (JS), int/String (Java/C++)
-   ✓ Code blocks: indentation (Python), braces {} (C-family/Java/JS)
-   ✓ Statement terminators: none (Python), semicolons (Java/C++/JS/C)
-   
-   Method C - Keyword Patterns:
-   ✓ Python: def, class, import, from, if __name__, self, None, True/False
-   ✓ Java: public, class, static, void, new, extends, implements
-   ✓ C++: #include, using namespace, std::, vector, cout, cin
-   ✓ JavaScript: const, let, function, =>, console, require/import
-   ✓ C: #include, printf, scanf, malloc, free, struct
-   
-   Method D - Library/Framework Clues:
-   ✓ Python: numpy, pandas, collections, itertools
-   ✓ Java: java.util, Scanner, ArrayList, HashMap
-   ✓ C++: <iostream>, <vector>, <algorithm>, <map>
-   ✓ JavaScript: Array.from, .map, .filter, Promise
+STEP 2 — THINK: Reason through the question step by step. Consider each option if it is multiple choice. Use your knowledge to determine the correct answer.
 
-3️⃣ INPUT/OUTPUT SPECIFICATION:
-   • Input format: [How is data provided?]
-   • Input constraints: [Size limits, value ranges]
-   • Output format: [What to return/print?]
-   • Output requirements: [Specific formatting needed?]
+STEP 3 — ANSWER: Output ONLY the final answer. Nothing else.
 
-4️⃣ EXAMPLES & TEST CASES:
-   • Sample inputs provided
-   • Expected outputs
-   • Explanation of examples
-   • Pattern recognition from examples
+Rules:
+• Multiple-choice → reply with the correct option letter and its full text. Example: "C. 42"
+• True/False → reply "True" or "False"
+• Fill in the blank → reply with just the answer
+• Coding problem → reply with ONLY the complete, correct, runnable code, wrapped in a single fenced code block (\`\`\`language ... \`\`\`)
+• Math problem → show the key calculation steps, then the final numerical answer
+• Any other question → reply with a direct, concise answer
 
-5️⃣ CONSTRAINTS & EDGE CASES:
-   • Time limits (if mentioned)
-   • Memory limits (if mentioned)
-   • Value ranges (min/max)
-   • Special cases: empty input, single element, duplicates, negatives, zeros
-   • Boundary conditions
-
-6️⃣ HIDDEN REQUIREMENTS:
-   • Sorted vs unsorted input
-   • Unique vs duplicate values
-   • 0-indexed vs 1-indexed
-   • Inclusive vs exclusive ranges
-   • Case sensitivity
-
-╔═══════════════════════════════════════════════════════════════════╗
-║                    PHASE 2: YOUR RESPONSE                          ║
-╚═══════════════════════════════════════════════════════════════════╝
-
-THINKING:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📋 PROBLEM UNDERSTANDING:
-   Problem Type: [Array/String/Tree/Graph/DP/Math/etc.]
-   Core Task: [In one clear sentence]
-   Input: [Describe what we receive]
-   Output: [Describe what we must produce]
-   Key Insight: [What makes this problem solvable?]
-
-🔍 LANGUAGE IDENTIFICATION:
-   Detected Language: **[EXACT LANGUAGE NAME]**
-   Confidence Level: [99% / 95% / 90% / 80%]
-   
-   Evidence Found:
-   ✓ [List 3-5 specific indicators you saw]
-   ✓ [Be very specific - quote exact syntax if possible]
-   ✓ [Explain why each indicator points to this language]
-   
-   Alternative Possibilities: [Any other languages it could be? Why ruled out?]
-   Final Decision: [Confirm the language with reasoning]
-
-💡 SOLUTION DESIGN:
-   Approach Name: [e.g., "Two Pointers", "Dynamic Programming", "Binary Search"]
-   
-   Why This Approach:
-   • [Reason 1: Why it fits the problem]
-   • [Reason 2: Why it's optimal]
-   • [Reason 3: Why alternatives are worse]
-   
-   Algorithm Steps:
-   1. [First step with clear action]
-   2. [Second step with clear action]
-   3. [Continue until complete]
-   
-   Data Structures:
-   • Primary: [Main DS used - why?]
-   • Secondary: [Supporting DS - why?]
-   • Avoided: [What you didn't use - why not?]
-   
-   Key Variables:
-   • [Variable name]: [Purpose and type]
-   • [Variable name]: [Purpose and type]
-
-⚡ COMPLEXITY ANALYSIS:
-   Time Complexity: O(?)
-   • Best case: O(?) - [when?]
-   • Average case: O(?) - [typical scenario]
-   • Worst case: O(?) - [when?]
-   • Explanation: [Why this complexity? Count operations]
-   
-   Space Complexity: O(?)
-   • Auxiliary space: O(?) - [extra memory used]
-   • Explanation: [What takes up space?]
-   
-   Can We Do Better?
-   • [Is this optimal? Why or why not?]
-   • [Any trade-offs available?]
-
-🎯 EDGE CASES & VALIDATION:
-   Critical Edge Cases:
-   1. [Edge case 1] → [How solution handles it]
-   2. [Edge case 2] → [How solution handles it]
-   3. [Edge case 3] → [How solution handles it]
-   4. [Edge case 4] → [How solution handles it]
-   5. [Edge case 5] → [How solution handles it]
-   
-   Input Validation:
-   • [What inputs could break the solution?]
-   • [How do we guard against them?]
-
-🧪 CORRECTNESS VERIFICATION:
-   Test Case 1: [Use provided example]
-   • Input: [Show input]
-   • Trace: [Walk through algorithm step-by-step]
-   • Output: [Show output]
-   • Match: [Does it match expected? ✓/✗]
-   
-   Test Case 2: [Create edge case]
-   • Input: [Show input]
-   • Expected: [What should happen]
-   • Verified: [Mentally confirm it works]
-
-🔧 IMPLEMENTATION NOTES:
-   • [Any tricky parts to watch out for]
-   • [Common mistakes to avoid]
-   • [Language-specific gotchas]
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-ANSWER:
-
-╔═══════════════════════════════════════════════════════════════════╗
-║                    CODE IMPLEMENTATION                             ║
-║            (Production-Ready, Bug-Free, Optimal)                   ║
-╚═══════════════════════════════════════════════════════════════════╝
-
-[Write ONLY the complete, executable code below]
-
-╔═══════════════════════════════════════════════════════════════════╗
-║                    CODE QUALITY STANDARDS                          ║
-╚═══════════════════════════════════════════════════════════════════╝
-
-MANDATORY REQUIREMENTS:
-✓ Use EXACT language detected (no substitutions ever)
-✓ Include ALL imports/headers/includes at the top
-✓ Complete, runnable code (not pseudo-code)
-✓ Handle ALL edge cases identified
-✓ Optimal time/space complexity
-✓ Clean, readable variable names
-✓ Strategic comments (explain "why", not "what")
-✓ Proper error handling where needed
-✓ Follow language conventions strictly
-✓ No syntax errors (triple-check)
-
-╔═══════════════════════════════════════════════════════════════════╗
-║              LANGUAGE-SPECIFIC MASTERY GUIDE                       ║
-╚═══════════════════════════════════════════════════════════════════╝
-
-🐍 PYTHON EXCELLENCE:
-   Structure:
-   • Type hints: def solve(nums: List[int]) -> int:
-   • Imports: from typing import List, Dict, Set, Optional, Tuple
-   • Main guard: if __name__ == "__main__":
-   
-   Style:
-   • List comprehensions: [x*2 for x in nums if x > 0]
-   • Enumerate: for i, val in enumerate(arr):
-   • Dictionary methods: dict.get(), dict.setdefault()
-   • String methods: str.split(), str.join(), str.strip()
-   • Built-ins: sum(), max(), min(), sorted(), reversed()
-   
-   Best Practices:
-   • Use f-strings: f"Result: {value}"
-   • Pythonic idioms: if x in collection, for _ in range(n)
-   • Collections: from collections import Counter, defaultdict, deque
-   • No semicolons, 4-space indentation
-
-☕ JAVA EXCELLENCE:
-   Structure:
-   • Complete class: public class Solution {
-   • Main method: public static void main(String[] args) {
-   • Method signature: public int solve(int[] nums) {
-   
-   Imports:
-   • import java.util.*;
-   • import java.io.*;
-   • Specific: ArrayList, HashMap, HashSet, PriorityQueue
-   
-   Style:
-   • CamelCase: myVariable, MyClass
-   • Generics: List<Integer>, Map<String, Integer>
-   • Enhanced for: for (int num : nums)
-   • StringBuilder for string concatenation
-   
-   Best Practices:
-   • Use appropriate collections
-   • Handle null checks
-   • Close resources (try-with-resources)
-   • Proper exception handling
-
-⚙️ C++ EXCELLENCE:
-   Structure:
-   • Headers: #include <iostream>, <vector>, <algorithm>, <map>, <set>
-   • Namespace: using namespace std; OR std:: prefix
-   • Main: int main() { ... return 0; }
-   
-   Modern C++ (C++11/14/17):
-   • auto keyword: auto it = map.begin();
-   • Range-based loops: for (auto& x : vec)
-   • Lambda functions: sort(v.begin(), v.end(), [](int a, int b) { return a > b; });
-   • Smart pointers: unique_ptr, shared_ptr
-   
-   STL Mastery:
-   • Containers: vector, map, unordered_map, set, unordered_set, queue, stack
-   • Algorithms: sort, binary_search, lower_bound, upper_bound
-   • Iterators: begin(), end(), rbegin(), rend()
-   
-   Best Practices:
-   • Pass by reference: void func(vector<int>& v)
-   • const correctness: const int& getValue()
-   • Avoid memory leaks
-   • Use STL over raw arrays
-
-📜 JAVASCRIPT EXCELLENCE:
-   Structure:
-   • Function: function solve(nums) { } OR const solve = (nums) => { }
-   • Main execution: solve(input);
-   
-   Modern ES6+:
-   • const/let (never var)
-   • Arrow functions: const add = (a, b) => a + b;
-   • Template literals: \`Result: \${value}\`
-   • Destructuring: const [a, b] = arr; const {x, y} = obj;
-   • Spread: [...arr], {...obj}
-   
-   Array Methods:
-   • map, filter, reduce, find, some, every
-   • sort, slice, splice, concat
-   
-   Best Practices:
-   • Use strict equality: ===
-   • Handle undefined/null
-   • Use Array methods over loops
-   • Proper async/await if needed
-
-🔧 C EXCELLENCE:
-   Structure:
-   • Headers: #include <stdio.h>, <stdlib.h>, <string.h>, <math.h>
-   • Main: int main() { ... return 0; }
-   
-   Memory Management:
-   • malloc/calloc for allocation
-   • free for deallocation
-   • Check for NULL after allocation
-   
-   Best Practices:
-   • Proper pointer usage
-   • Bounds checking
-   • Initialize variables
-   • Use const where appropriate
-   • Handle edge cases explicitly
-
-╔═══════════════════════════════════════════════════════════════════╗
-║                    FINAL VERIFICATION CHECKLIST                    ║
-╚═══════════════════════════════════════════════════════════════════╝
-
-Before submitting, verify:
-□ Language matches screenshot (100% certain)
-□ All imports/headers included
-□ Code compiles/runs without errors
-□ Handles all edge cases
-□ Optimal complexity achieved
-□ Variable names are clear
-□ Comments explain complex logic
-□ Follows language conventions
-□ No off-by-one errors
-□ No integer overflow issues
-□ No null/undefined issues
-□ Tested with sample input mentally
-□ Output format matches requirements
-
-╔═══════════════════════════════════════════════════════════════════╗
-║                    NOW ANALYZE AND RESPOND                         ║
-╚═══════════════════════════════════════════════════════════════════╝`
-      };
-      
-      const response = await fetch(`${this.llmHelper.ollamaUrl || 'http://localhost:11434'}/api/generate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: currentModel,
-          prompt: prompts[analysisType],
-          images: [base64Image],
-          stream: true
-        }),
-        signal: this.currentProcessingAbortController?.signal
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+CRITICAL: Read the question EXACTLY as written. Do not misread options. Do not skip words. Do not invent information that is not on screen. If you are unsure between options, re-read the screenshot text carefully before deciding.`,
       }
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('No response body reader available');
-      }
-
-      const decoder = new TextDecoder();
-      let accumulatedText = '';
 
       // Send initial problem info with empty text
       const initialProblemInfo = {
         problem_statement: "",
         input_format: { description: "Generated from screenshot", parameters: [] as any[] },
-        output_format: { description: "Generated from screenshot", type: "string", subtype: "text" },
+        output_format: {
+          description: "Generated from screenshot",
+          type: "string",
+          subtype: "text",
+        },
         complexity: { time: "N/A", space: "N/A" },
         test_cases: [] as any[],
         validation_type: "manual",
         difficulty: "custom",
-        isStreaming: true
-      };
-      
-      mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, initialProblemInfo);
-      this.appState.setProblemInfo(initialProblemInfo);
-
-      try {
-        while (true) {
-          // Check if aborted
-          if (this.currentProcessingAbortController?.signal.aborted) {
-            console.log('[ProcessingHelper] Screenshot analysis aborted by user');
-            reader.cancel();
-            break;
-          }
-          
-          const { done, value } = await reader.read();
-          
-          if (done) break;
-          
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n').filter(line => line.trim());
-          
-          for (const line of lines) {
-            try {
-              const data = JSON.parse(line);
-              if (data.response) {
-                accumulatedText += data.response;
-                
-                // Send streaming update to Solutions view
-                const updatedProblemInfo = {
-                  ...initialProblemInfo,
-                  problem_statement: accumulatedText,
-                  isStreaming: !data.done
-                };
-                
-                mainWindow.webContents.send('screenshot-analysis-stream', updatedProblemInfo);
-                this.appState.setProblemInfo(updatedProblemInfo);
-              }
-              
-              if (data.done) {
-                // Send final result
-                const finalProblemInfo = {
-                  ...initialProblemInfo,
-                  problem_statement: accumulatedText,
-                  isStreaming: false
-                };
-                
-                mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, finalProblemInfo);
-                this.appState.setProblemInfo(finalProblemInfo);
-                console.log("[ProcessingHelper] Streaming image analysis completed successfully");
-                return;
-              }
-            } catch (parseError) {
-              console.warn('[ProcessingHelper] Skipping invalid JSON line:', line.substring(0, 100));
-            }
-          }
-        }
-      } catch (error: any) {
-        if (error.name === 'AbortError') {
-          console.log('[ProcessingHelper] Screenshot analysis aborted');
-          throw error;
-        }
-        throw error;
-      } finally {
-        reader.releaseLock();
+        isStreaming: true,
       }
+
+      mainWindow.webContents.send(
+        this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
+        initialProblemInfo
+      )
+      this.appState.setProblemInfo(initialProblemInfo)
+
+      let accumulatedText = ""
+      const full = await this.llmHelper.streamImageAnalysis(
+        prompts[analysisType],
+        [base64Image],
+        (token) => {
+          accumulatedText += token
+          const updatedProblemInfo = {
+            ...initialProblemInfo,
+            problem_statement: accumulatedText,
+            isStreaming: true,
+          }
+          mainWindow.webContents.send("screenshot-analysis-stream", updatedProblemInfo)
+          this.appState.setProblemInfo(updatedProblemInfo)
+        },
+        this.currentProcessingAbortController?.signal,
+        0.0 // temperature = 0 for maximum accuracy
+      )
+
+      const finalProblemInfo = {
+        ...initialProblemInfo,
+        problem_statement: full || accumulatedText,
+        isStreaming: false,
+      }
+      mainWindow.webContents.send(
+        this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
+        finalProblemInfo
+      )
+      this.appState.setProblemInfo(finalProblemInfo)
+      if (isDev) console.log("[ProcessingHelper] Streaming image analysis completed successfully")
     } catch (error) {
-      console.error('[ProcessingHelper] Streaming image analysis error:', error);
-      throw error;
+      console.error("[ProcessingHelper] Streaming image analysis error:", error)
+      throw error
     }
   }
 }

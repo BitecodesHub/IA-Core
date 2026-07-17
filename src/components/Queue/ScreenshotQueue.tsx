@@ -14,7 +14,7 @@ interface ScreenshotQueueProps {
 const ScreenshotQueue: React.FC<ScreenshotQueueProps> = ({
   isLoading,
   screenshots,
-  onDeleteScreenshot
+  onDeleteScreenshot,
 }) => {
   if (screenshots.length === 0) {
     return <></>

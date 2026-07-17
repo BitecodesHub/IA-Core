@@ -28,31 +28,17 @@ ToastViewport.displayName = ToastPrimitive.Viewport.displayName
 
 type ToastVariant = "neutral" | "success" | "error"
 
-interface ToastProps
-  extends React.ComponentPropsWithoutRef<typeof ToastPrimitive.Root> {
+interface ToastProps extends React.ComponentPropsWithoutRef<typeof ToastPrimitive.Root> {
   variant?: ToastVariant
 }
 
-const toastVariants: Record<ToastVariant, string> = {
-  neutral: "bg-yellow-500 text-white",
-  success: "bg-green-500 text-white",
-  error: "bg-red-500 text-white"
-}
-
-const Toast = React.forwardRef<
-  React.ElementRef<typeof ToastPrimitive.Root>,
-  ToastProps
->(({ className, variant = "neutral", ...props }, ref) => (
-  <ToastPrimitive.Root
-    ref={ref}
-    className={cn(
-      "group fixed top-4 left-4 z-50 w-auto max-w-sm px-4 py-2 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom",
-      toastVariants[variant],
-      className
-    )}
-    {...props}
-  />
-))
+// Stealth: the overlay must never surface an attention-grabbing pop-up banner.
+// All error and status feedback is shown inline within the content-protected UI
+// instead, so the Toast is intentionally neutralized — no caller can produce a
+// visible pop. (showToast() calls are harmless no-ops for the UI.)
+const Toast = React.forwardRef<React.ElementRef<typeof ToastPrimitive.Root>, ToastProps>(
+  (_props, _ref) => null
+)
 Toast.displayName = ToastPrimitive.Root.displayName
 
 const ToastAction = React.forwardRef<
@@ -73,10 +59,7 @@ const ToastClose = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <ToastPrimitive.Close
     ref={ref}
-    className={cn(
-      "absolute top-2 right-2 text-white opacity-70 hover:opacity-100",
-      className
-    )}
+    className={cn("absolute top-2 right-2 text-white opacity-70 hover:opacity-100", className)}
     {...props}
   >
     <X className="h-4 w-4" />
@@ -88,11 +71,7 @@ const ToastTitle = React.forwardRef<
   React.ElementRef<typeof ToastPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitive.Title>
 >(({ className, ...props }, ref) => (
-  <ToastPrimitive.Title
-    ref={ref}
-    className={cn("font-semibold text-sm", className)}
-    {...props}
-  />
+  <ToastPrimitive.Title ref={ref} className={cn("font-semibold text-sm", className)} {...props} />
 ))
 ToastTitle.displayName = ToastPrimitive.Title.displayName
 
@@ -116,5 +95,5 @@ export {
   ToastAction,
   ToastClose,
   ToastTitle,
-  ToastDescription
+  ToastDescription,
 }
