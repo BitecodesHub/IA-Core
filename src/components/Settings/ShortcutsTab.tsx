@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState, useCallback } from "react"
 import type { Binding, LocalShortcutActionId, ShortcutActionId } from "../../types/settings"
 import KeyCaptureInput from "./KeyCaptureInput"
 import { useSettings } from "./useSettings"
+import { useImportExport } from "./useImportExport"
+import ImportExportPanel from "./ImportExportPanel"
 import {
   DEFAULT_LOCAL_BINDINGS,
   LOCAL_SHORTCUT_ACTION_LIST,
@@ -45,6 +47,16 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
   const load = useCallback(async () => {
     setSnapshot(await window.electronAPI.getShortcuts())
   }, [])
+
+  const io = useImportExport(
+    () => window.electronAPI.exportShortcuts(),
+    async (data) => {
+      const res = await window.electronAPI.importShortcuts(data)
+      const ok = !!res && (!("error" in res) || !res.error)
+      if (ok) await load()
+      return { ok, error: res && "error" in res ? res.error : undefined }
+    }
+  )
 
   useEffect(() => {
     load()
@@ -167,24 +179,24 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
           Reset all
         </button>
         <button
-          className="text-xs px-2 py-1 rounded border border-white/40 text-white"
-          onClick={() => window.electronAPI.exportShortcutsToFile()}
+          className="text-xs px-2 py-1 rounded border border-white/40 text-white hover:bg-white/10"
+          onClick={io.startExport}
         >
           Export…
         </button>
         <button
-          className="text-xs px-2 py-1 rounded border border-white/40 text-white"
-          onClick={async () => {
-            const res = await window.electronAPI.importShortcutsFromFile()
-            if (res && "error" in res && res.error) setNotice(res.error)
-            await load()
-          }}
+          className="text-xs px-2 py-1 rounded border border-white/40 text-white hover:bg-white/10"
+          onClick={io.startImport}
         >
           Import…
         </button>
       </div>
 
-      {notice && <div className="text-xs text-amber-300">{notice}</div>}
+      <ImportExportPanel io={io} entity="shortcuts" />
+
+      {(notice || io.msg) && (
+        <div className="text-xs text-amber-300">{io.msg ?? notice}</div>
+      )}
 
       <div className="space-y-1.5">
         {rows.map((row) => (

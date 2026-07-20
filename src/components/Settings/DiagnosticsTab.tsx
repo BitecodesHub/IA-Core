@@ -7,11 +7,15 @@ const DiagnosticsTab: React.FC = () => {
   const { settings } = useSettings()
   const [health, setHealth] = useState<ProviderHealth[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
       setHealth(await window.electronAPI.getAiProvidersHealth())
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load diagnostics.")
     } finally {
       setLoading(false)
     }
@@ -40,6 +44,8 @@ const DiagnosticsTab: React.FC = () => {
         </button>
       </div>
 
+      {error && <div className="text-xs text-red-400" role="alert">{error}</div>}
+
       <div className="space-y-1.5">
         {health.map((h) => {
           const provider = settings.ai.providers[h.providerId]
@@ -51,7 +57,7 @@ const DiagnosticsTab: React.FC = () => {
                   {h.ok ? "Healthy" : "Needs attention"}
                 </span>
               </div>
-              <div className="mt-1 text-[10px] text-white/45">
+              <div className="mt-1 text-[11px] text-white/70">
                 {h.ok
                   ? `${h.modelCount ?? 0} models${h.latencyMs ? `, ${h.latencyMs}ms` : ""}`
                   : h.error}
@@ -64,7 +70,7 @@ const DiagnosticsTab: React.FC = () => {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-2 text-[10px] text-white/45">
+      <div className="grid grid-cols-2 gap-2 text-[11px] text-white/70">
         <div>Settings version: {settings.version}</div>
         <div>Theme: {settings.general.theme}</div>
         <div>Active provider: {settings.ai.activeProviderId}</div>

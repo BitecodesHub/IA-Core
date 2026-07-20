@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from "react"
 import ThinkingAnswerRenderer from "../ui/ThinkingAnswerRenderer"
 import { AUTO_SCROLL_THRESHOLD } from "../../config/environment"
+import { stripMcqMarker } from "../../lib/mcqAnswer"
 
 export interface ChatMessage {
   role: "user" | "assistant"
@@ -27,7 +28,7 @@ const MessageBubble = React.memo(function MessageBubble({ msg }: { msg: ChatMess
           <span className="whitespace-pre-wrap">{msg.text}</span>
         ) : (
           <ThinkingAnswerRenderer
-            text={msg.text || (msg.isStreaming ? "Generating response..." : "")}
+            text={stripMcqMarker(msg.text) || (msg.isStreaming ? "Generating response..." : "")}
           />
         )}
       </div>

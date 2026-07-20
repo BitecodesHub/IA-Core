@@ -236,6 +236,71 @@ describe("OpenAICompatibleProvider — listModels / healthCheck", () => {
     expect(h.ok).toBe(false)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
+
+  it("derives vision from architecture.input_modalities (authoritative over the name heuristic)", async () => {
+    const fetchSpy = vi.fn(async () =>
+      jsonResponse({
+        data: [
+          { id: "anthropic/claude-3", architecture: { input_modalities: ["text", "image"] } },
+          { id: "openai/gpt-text", architecture: { input_modalities: ["text"] } },
+          // Name looks vision-like (llava) but metadata says text-only → false.
+          { id: "vendor/llava-mini", architecture: { input_modalities: ["text"] } },
+        ],
+      })
+    )
+    vi.stubGlobal("fetch", fetchSpy)
+    const p = new OpenAICompatibleProvider(baseConfig, () => "k")
+    const models = await p.listModels()
+    expect(models.find((m) => m.name === "anthropic/claude-3")?.vision).toBe(true)
+    expect(models.find((m) => m.name === "openai/gpt-text")?.vision).toBe(false)
+    expect(models.find((m) => m.name === "vendor/llava-mini")?.vision).toBe(false)
+    // The full catalog is returned regardless of vision capability.
+    expect(models.map((m) => m.name)).toHaveLength(3)
+  })
+
+  it("supports the legacy architecture.modality string", async () => {
+    const fetchSpy = vi.fn(async () =>
+      jsonResponse({ data: [{ id: "some/vlm", architecture: { modality: "text+image->text" } }] })
+    )
+    vi.stubGlobal("fetch", fetchSpy)
+    const p = new OpenAICompatibleProvider(baseConfig, () => "k")
+    const models = await p.listModels()
+    expect(models[0].vision).toBe(true)
+  })
+
+  it("falls back to the name/config heuristic when no modality metadata is present", async () => {
+    const fetchSpy = vi.fn(async () =>
+      jsonResponse({ data: [{ id: "anthropic/claude-sonnet-5" }, { id: "x/llava-next" }] })
+    )
+    vi.stubGlobal("fetch", fetchSpy)
+    const p = new OpenAICompatibleProvider(baseConfig, () => "k")
+    const models = await p.listModels()
+    // configured visionModel matches → vision; llava name heuristic → vision.
+    expect(models.find((m) => m.name === "anthropic/claude-sonnet-5")?.vision).toBe(true)
+    expect(models.find((m) => m.name === "x/llava-next")?.vision).toBe(true)
+  })
+
+  it("retries discovery on a transient failure then succeeds", async () => {
+    let call = 0
+    const fetchSpy = vi.fn(async () => {
+      call++
+      if (call === 1) return jsonResponse({ error: "temporarily unavailable" }, false, 503)
+      return jsonResponse({ data: [{ id: "anthropic/claude-sonnet-5" }] })
+    })
+    vi.stubGlobal("fetch", fetchSpy)
+    const p = new OpenAICompatibleProvider(baseConfig, () => "k")
+    const models = await p.listModels()
+    expect(models).toHaveLength(1)
+    expect(fetchSpy).toHaveBeenCalledTimes(2) // 1 failure + 1 retry
+  })
+
+  it("does NOT retry a terminal (401) discovery failure", async () => {
+    const fetchSpy = vi.fn(async () => jsonResponse({ error: "invalid key" }, false, 401))
+    vi.stubGlobal("fetch", fetchSpy)
+    const p = new OpenAICompatibleProvider(baseConfig, () => "k")
+    await expect(p.listModels()).rejects.toThrow(/401/)
+    expect(fetchSpy).toHaveBeenCalledTimes(1) // no retry on auth failure
+  })
 })
 
 describe("OpenAICompatibleProvider — OpenRouter fallback models array", () => {

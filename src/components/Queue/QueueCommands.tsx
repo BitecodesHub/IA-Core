@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from "react"
 import { IoLogOutOutline } from "react-icons/io5"
+import { Settings } from "lucide-react"
 
 interface QueueCommandsProps {
-  onTooltipVisibilityChange: (visible: boolean, height: number) => void
   screenshots: Array<{ path: string; preview: string }>
   onChatToggle: () => void
   onSettingsToggle: () => void
@@ -11,26 +11,15 @@ interface QueueCommandsProps {
 }
 
 const QueueCommands: React.FC<QueueCommandsProps> = ({
-  onTooltipVisibilityChange,
   onChatToggle,
   onSettingsToggle,
   mode,
 }) => {
-  const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const tooltipRef = useRef<HTMLDivElement>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
   const [audioResult, setAudioResult] = useState<string | null>(null)
   const chunks = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
-
-  useEffect(() => {
-    let tooltipHeight = 0
-    if (tooltipRef.current && isTooltipVisible) {
-      tooltipHeight = tooltipRef.current.offsetHeight + 10
-    }
-    onTooltipVisibilityChange(isTooltipVisible, tooltipHeight)
-  }, [isTooltipVisible])
 
   // Stealth: ensure the microphone is fully released on unmount so the OS
   // mic-in-use indicator never lingers if the overlay closes mid-recording.
@@ -49,10 +38,6 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       return () => clearTimeout(timer)
     }
   }, [audioResult])
-
-  const handleTooltipToggle = () => {
-    setIsTooltipVisible(!isTooltipVisible)
-  }
 
   const handleRecordClick = async () => {
     if (!isRecording) {
@@ -104,26 +89,11 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   return (
     <div className="w-fit p-1" data-overlay-interactive>
       <style>{`
-        @keyframes glow-pulse {
-          0%, 100% {
-            box-shadow: 0 0 3px rgba(255, 255, 255, 0.3),
-                        0 0 5px rgba(255, 255, 255, 0.2);
-          }
-          50% {
-            box-shadow: 0 0 5px rgba(255, 255, 255, 0.4),
-                        0 0 8px rgba(255, 255, 255, 0.25);
-          }
+        @keyframes border-flow {
+          0% { background-position: 0% 50%; }
+          100% { background-position: 200% 50%; }
         }
 
-        @keyframes border-flow {
-          0% {
-            background-position: 0% 50%;
-          }
-          100% {
-            background-position: 200% 50%;
-          }
-        }  
-        
         .glass-capsule {
           background: rgba(0, 0, 0, 0.85);
           backdrop-filter: blur(12px);
@@ -137,14 +107,11 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           isolation: isolate;
           will-change: auto;
         }
-        
+
         .glass-capsule::before {
           content: '';
           position: absolute;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
+          top: 0; left: 0; right: 0; bottom: 0;
           border-radius: inherit;
           padding: 1px;
           background: linear-gradient(
@@ -171,10 +138,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         .logo-circle::before {
           content: '';
           position: absolute;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
+          top: 0; left: 0; right: 0; bottom: 0;
           border-radius: inherit;
           padding: 2px;
           background: linear-gradient(
@@ -194,10 +158,9 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         .stable-button {
           background: #000000;
           border: 1px solid rgba(255, 255, 255, 0.5);
-          transition: border-color 0.2s ease, box-shadow 0.2s ease;
+          transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
           position: relative;
           isolation: isolate;
-          will-change: border-color, box-shadow;
         }
 
         .stable-button:hover {
@@ -205,41 +168,25 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           color: #000000;
           border-color: rgba(255, 255, 255, 1);
         }
-
-        .help-button {
-          background: #000000;
-          border: 1px solid rgba(255, 255, 255, 0.5);
-          transition: border-color 0.2s ease, box-shadow 0.2s ease;
-          position: relative;
-          isolation: isolate;
-          will-change: border-color, box-shadow;
-        }
-
-        .help-button:hover {
-          background: #000000;
-          border-color: rgba(255, 255, 255, 1);
-          box-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
-        }
       `}</style>
 
-      <div className="text-xs text-white glass-capsule sm:px-6 flex items-center justify-center gap-3 sm:gap-4 draggable-area rounded-full relative">
-        {/* Logo Circle with Ismail's AI */}
+      <div className="text-xs text-white glass-capsule flex items-center justify-center gap-3 sm:gap-4 draggable-area rounded-full relative">
+        {/* Logo + name */}
         <div className="flex items-center gap-2 sm:gap-3">
-          <div className="logo-circle w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center border-2 border-white">
+          <div className="logo-circle w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center border-2 border-white">
             <span className="text-xs sm:text-sm font-bold text-white">IA</span>
           </div>
           <span className="text-xs sm:text-sm font-semibold text-white whitespace-nowrap">
-            Ismail's AI
+            Ismail&apos;s AI
           </span>
         </div>
 
-        {/* Mode indicator (non-interactive; renders inside the content-protected
-            window so it never leaks to screen capture). */}
+        {/* Mode indicator (non-interactive; inside the content-protected window). */}
         <div
           className="flex items-center gap-1.5"
           title={
             mode === "online"
-              ? "Online mode — OpenRouter (Claude Sonnet). ⌘⌥⇧M to toggle."
+              ? "Online mode — OpenRouter. ⌘⌥⇧M to toggle."
               : "Offline mode — local Ollama. ⌘⌥⇧M to toggle."
           }
         >
@@ -248,137 +195,51 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
               mode === "online" ? "bg-sky-400" : "bg-emerald-400"
             }`}
           />
-          <span className="text-[10px] sm:text-[11px] leading-none text-white/80 whitespace-nowrap">
+          <span className="text-[11px] leading-none text-white/80 whitespace-nowrap">
             {mode === "online" ? "Online" : "Offline"}
           </span>
         </div>
 
         {/* Separator */}
-        <div className="hidden sm:block h-6 w-px bg-white/30" />
+        <div className="hidden sm:block h-6 w-px bg-white/20" />
 
-        {/* Show/Hide */}
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] sm:text-[11px] leading-none text-white whitespace-nowrap">
-            Show/Hide
-          </span>
-          <div className="flex gap-1">
-            <button className="stable-button rounded-lg px-2 py-1 text-[10px] sm:text-[11px] leading-none text-white">
-              ⌘
-            </button>
-            <button className="stable-button rounded-lg px-2 py-1 text-[10px] sm:text-[11px] leading-none text-white">
-              B
-            </button>
-          </div>
-        </div>
+        {/* Actions */}
+        <button
+          className={`stable-button rounded-lg px-2.5 py-1 text-[11px] leading-none text-white ${
+            isRecording ? "!bg-red-600 !border-red-400" : ""
+          }`}
+          onClick={handleRecordClick}
+          type="button"
+        >
+          <span className="whitespace-nowrap">{isRecording ? "● Stop" : "Record"}</span>
+        </button>
 
-        {/* Voice Recording Button */}
-        <div className="flex items-center gap-2">
-          <button
-            className={`stable-button rounded-lg px-2 sm:px-3 py-1 text-[10px] sm:text-[11px] leading-none text-white flex items-center gap-1 ${
-              isRecording ? "!bg-red-600 !border-red-400" : ""
-            }`}
-            onClick={handleRecordClick}
-            type="button"
-          >
-            {isRecording ? (
-              <span className="whitespace-nowrap">●Stop</span>
-            ) : (
-              <span className="whitespace-nowrap">Record</span>
-            )}
-          </button>
-        </div>
+        <button
+          className="stable-button rounded-lg px-2.5 py-1 text-[11px] leading-none text-white"
+          onClick={onChatToggle}
+          type="button"
+        >
+          <span className="whitespace-nowrap">Chat</span>
+        </button>
 
-        {/* Chat Button */}
-        <div className="flex items-center gap-2">
-          <button
-            className="stable-button rounded-lg px-2 sm:px-3 py-1 text-[10px] sm:text-[11px] leading-none text-white flex items-center gap-1"
-            onClick={onChatToggle}
-            type="button"
-          >
-            <span className="whitespace-nowrap">Chat</span>
-          </button>
-        </div>
-
-        {/* Settings Button */}
-        <div className="flex items-center gap-2">
-          <button
-            className="stable-button rounded-lg px-2 sm:px-3 py-1 text-[10px] sm:text-[11px] leading-none text-white flex items-center gap-1"
-            onClick={onSettingsToggle}
-            type="button"
-          >
-            <span className="whitespace-nowrap">Models</span>
-          </button>
-        </div>
-
-        {/* Question mark with tooltip */}
-        <div className="relative inline-block">
-          <button
-            className="help-button w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center cursor-pointer z-10"
-            onClick={handleTooltipToggle}
-            type="button"
-          >
-            <span className="text-[10px] sm:text-xs text-white font-semibold">?</span>
-          </button>
-
-          {/* Tooltip Content */}
-          {isTooltipVisible && (
-            <div
-              ref={tooltipRef}
-              className="absolute top-full right-0 mt-2 w-72 sm:w-80 z-50 max-w-[90vw]"
-            >
-              <div className="p-3 sm:p-4 text-xs bg-black backdrop-blur-md rounded-2xl border border-white text-white shadow-2xl overflow-hidden">
-                <div className="space-y-4">
-                  <h3 className="font-semibold text-sm text-white">Keyboard Shortcuts</h3>
-                  <div className="space-y-3">
-                    {/* Toggle Command */}
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-white flex-shrink-0">Toggle Window</span>
-                        <div className="flex gap-1 flex-shrink-0">
-                          <span className="bg-black border border-white/50 px-2 py-1 rounded-lg text-[10px] leading-none text-white">
-                            ⌘
-                          </span>
-                          <span className="bg-black border border-white/50 px-2 py-1 rounded-lg text-[10px] leading-none text-white">
-                            B
-                          </span>
-                        </div>
-                      </div>
-                      <p className="text-[10px] leading-relaxed text-white/80">
-                        Show or hide this window.
-                      </p>
-                    </div>
-                    {/* Screenshot Command */}
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-white flex-shrink-0">Take Screenshot</span>
-                        <div className="flex gap-1 flex-shrink-0">
-                          <span className="bg-black border border-white/50 px-2 py-1 rounded-lg text-[10px] leading-none text-white">
-                            ⌘
-                          </span>
-                          <span className="bg-black border border-white/50 px-2 py-1 rounded-lg text-[10px] leading-none text-white">
-                            H
-                          </span>
-                        </div>
-                      </div>
-                      <p className="text-[10px] leading-relaxed text-white/80">
-                        Take a screenshot of the problem description. The tool will automatically
-                        analyze and provide solutions.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <button
+          className="stable-button rounded-full w-7 h-7 flex items-center justify-center text-white"
+          onClick={onSettingsToggle}
+          type="button"
+          title="Settings"
+          aria-label="Settings"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
 
         {/* Separator */}
-        <div className="hidden sm:block h-6 w-px bg-white/30" />
+        <div className="hidden sm:block h-6 w-px bg-white/20" />
 
-        {/* Sign Out Button */}
+        {/* Quit */}
         <button
-          className="text-red-400 transition-colors hover:cursor-pointer"
-          title="Sign Out"
+          className="text-white/70 transition-colors hover:text-red-400 hover:cursor-pointer"
+          title="Quit"
+          aria-label="Quit"
           onClick={() => window.electronAPI.quitApp()}
         >
           <IoLogOutOutline className="w-4 h-4 sm:w-5 sm:h-5" />

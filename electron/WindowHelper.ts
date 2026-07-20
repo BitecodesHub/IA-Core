@@ -102,6 +102,9 @@ export class WindowHelper {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
+        // Stealth: DevTools is a separate, NON-content-protected window that would
+        // expose the whole renderer in a screen capture. Disable it in production.
+        devTools: isDev,
         preload: path.join(__dirname, "preload.js"),
       },
       show: false, // Start hidden, then show after setup
@@ -258,6 +261,12 @@ export class WindowHelper {
     })
 
     this.mainWindow.on("closed", () => {
+      // Cancel any pending debounced persist so a trailing timer does not fire
+      // against a destroyed window / stale bounds after close.
+      if (persistTimer) {
+        clearTimeout(persistTimer)
+        persistTimer = null
+      }
       this.mainWindow = null
       this.isWindowVisible = false
       this.windowPosition = null

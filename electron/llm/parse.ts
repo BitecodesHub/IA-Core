@@ -18,6 +18,29 @@ export function cleanJsonResponse(text: string): string {
   return text
 }
 
+/**
+ * Vision capability derived from an OpenAI-compatible `/models` entry's metadata
+ * (OpenRouter exposes `architecture.input_modalities`; some gateways use a
+ * legacy `architecture.modality` string). Returns `undefined` when no modality
+ * metadata is present, so the caller can fall back to a name heuristic.
+ *
+ * Explicit metadata is authoritative: a model that advertises modalities WITHOUT
+ * "image" returns `false` even if its name looks vision-like — the provider is
+ * the source of truth over a guess.
+ */
+export function visionFromModality(rawEntry: unknown): boolean | undefined {
+  if (typeof rawEntry !== "object" || rawEntry === null) return undefined
+  const arch = (rawEntry as { architecture?: unknown }).architecture
+  if (typeof arch !== "object" || arch === null) return undefined
+  const mods = (arch as { input_modalities?: unknown }).input_modalities
+  if (Array.isArray(mods)) {
+    return mods.some((m) => typeof m === "string" && m.toLowerCase() === "image")
+  }
+  const modality = (arch as { modality?: unknown }).modality
+  if (typeof modality === "string") return /image|vision|multimodal/i.test(modality)
+  return undefined
+}
+
 /** Name-based vision-capability guess, used when /api/show is unavailable. */
 export function heuristicVision(modelName: string): boolean {
   const known = [

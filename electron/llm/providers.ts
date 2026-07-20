@@ -1,11 +1,50 @@
 import type { AiCapability, AiProviderSettings } from "../config/schema"
-import { heuristicVision, takeLines } from "./parse"
+import { heuristicVision, takeLines, visionFromModality } from "./parse"
+import { mapWithConcurrency } from "./concurrency"
+import { isTransientError, backoffDelayMs } from "./retry"
+
+// Model discovery / capability probes run on a slow-or-flaky link too, so they get
+// the same resilience as generation: an idle (not total) timeout, and a short
+// transient-aware retry. Idle is capped so a Settings refresh stays responsive —
+// on a truly dead socket the fetch rejects fast and the retry gives up quickly.
+const DISCOVERY_IDLE_CAP_MS = 45_000
+const DISCOVERY_RETRY_CAP = 2
+
+function discoveryIdleMs(timeoutMs: number): number {
+  return Math.min(timeoutMs, DISCOVERY_IDLE_CAP_MS)
+}
+
+async function withDiscoveryRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let attempt = 0
+  for (;;) {
+    try {
+      return await fn()
+    } catch (err: any) {
+      const msg = err?.message ?? String(err)
+      if (attempt >= DISCOVERY_RETRY_CAP || !isTransientError(msg)) throw err
+      attempt++
+      await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, 400, 4000)))
+    }
+  }
+}
 
 export interface ModelInfo {
   providerId: string
   name: string
   vision: boolean
   capabilities: AiCapability[]
+}
+
+/**
+ * Result of a model-discovery attempt. Lets the renderer distinguish a genuine
+ * failure (`ok:false`, show `error`) from a reachable-but-empty catalog
+ * (`ok:true`, `models:[]`) instead of collapsing both into an empty list.
+ */
+export interface ModelDiscoveryResult {
+  providerId: string
+  ok: boolean
+  models: ModelInfo[]
+  error?: string
 }
 
 export interface ProviderHealth {
@@ -86,17 +125,32 @@ function streamErrorMessage(data: OpenAIChoiceDelta): string | undefined {
   return err.message ?? "provider error"
 }
 
-function createTimeoutSignal(signal: AbortSignal | undefined, timeoutMs: number) {
+/**
+ * An INACTIVITY (idle) timeout rather than a total one. The timer aborts only
+ * after `idleMs` elapses with no progress; every received chunk calls `kick()`
+ * to reset it. This is what makes generation robust on a slow connection: a
+ * response that keeps trickling in — however slowly — is never killed, and total
+ * wall-clock time is unbounded. A truly stalled connection (no bytes for the
+ * whole idle window) still aborts so the caller can retry. `state.timedOut`
+ * distinguishes an idle abort from a user cancellation via `signal`.
+ */
+function createIdleTimeoutSignal(signal: AbortSignal | undefined, idleMs: number) {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  const state = { timedOut: false }
+  let timer: ReturnType<typeof setTimeout>
+  const arm = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      state.timedOut = true
+      controller.abort()
+    }, idleMs)
+  }
+  arm()
   if (signal) {
     if (signal.aborted) controller.abort()
     else signal.addEventListener("abort", () => controller.abort(), { once: true })
   }
-  return {
-    signal: controller.signal,
-    cleanup: () => clearTimeout(timeoutId),
-  }
+  return { signal: controller.signal, kick: arm, cleanup: () => clearTimeout(timer), state }
 }
 
 async function safeErrorBody(response: Response): Promise<string> {
@@ -122,31 +176,26 @@ export class OllamaProvider implements LlmProvider {
   constructor(readonly config: AiProviderSettings) {}
 
   async listModels(): Promise<ModelInfo[]> {
-    const timeout = createTimeoutSignal(undefined, Math.min(this.config.timeoutMs, 15_000))
-    try {
-      const response = await fetch(joinUrl(this.config.endpoint, "/api/tags"), {
-        signal: timeout.signal,
-      })
-      if (!response.ok) throw new Error(`Ollama model discovery failed: ${response.status}`)
-      const data: any = await response.json()
-      const names: string[] = Array.isArray(data.models)
-        ? data.models.map((m: any) => String(m.name))
-        : []
-      const detailed = await Promise.all(
-        names.map(async (name) => {
-          const vision = await this.refreshCapability(name)
-          return {
-            providerId: this.config.id,
-            name,
-            vision,
-            capabilities: capabilitiesFor(vision),
-          }
+    const names = await withDiscoveryRetry<string[]>(async () => {
+      const idle = createIdleTimeoutSignal(undefined, discoveryIdleMs(this.config.timeoutMs))
+      try {
+        const response = await fetch(joinUrl(this.config.endpoint, "/api/tags"), {
+          signal: idle.signal,
         })
-      )
-      return detailed
-    } finally {
-      timeout.cleanup()
-    }
+        idle.kick()
+        if (!response.ok) throw new Error(`Ollama model discovery failed: ${response.status}`)
+        const data: any = await response.json()
+        return Array.isArray(data.models) ? data.models.map((m: any) => String(m.name)) : []
+      } finally {
+        idle.cleanup()
+      }
+    })
+    // Bound the per-model /api/show fan-out so a long model list does not open
+    // dozens of simultaneous requests (order is preserved).
+    return mapWithConcurrency(names, 4, async (name) => {
+      const vision = await this.refreshCapability(name)
+      return { providerId: this.config.id, name, vision, capabilities: capabilitiesFor(vision) }
+    })
   }
 
   async healthCheck(): Promise<ProviderHealth> {
@@ -173,19 +222,24 @@ export class OllamaProvider implements LlmProvider {
 
   async refreshCapability(model: string): Promise<boolean> {
     try {
-      const timeout = createTimeoutSignal(undefined, Math.min(this.config.timeoutMs, 15_000))
-      const response = await fetch(joinUrl(this.config.endpoint, "/api/show"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: model }),
-        signal: timeout.signal,
-      }).finally(timeout.cleanup)
-      if (!response.ok) {
-        const fallback = heuristicVision(model)
-        this.visionCache.set(model, fallback)
-        return fallback
-      }
-      const data: any = await response.json()
+      // Idle timeout + short retry so a slow-but-live /api/show still yields the
+      // authoritative capability instead of silently degrading to the name guess.
+      const data: any = await withDiscoveryRetry(async () => {
+        const idle = createIdleTimeoutSignal(undefined, discoveryIdleMs(this.config.timeoutMs))
+        try {
+          const response = await fetch(joinUrl(this.config.endpoint, "/api/show"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: model }),
+            signal: idle.signal,
+          })
+          idle.kick()
+          if (!response.ok) throw new Error(`Ollama /api/show failed: ${response.status}`)
+          return await response.json()
+        } finally {
+          idle.cleanup()
+        }
+      })
       const caps: string[] = Array.isArray(data?.capabilities) ? data.capabilities : []
       const families: string[] = Array.isArray(data?.details?.families) ? data.details.families : []
       const vision =
@@ -195,6 +249,7 @@ export class OllamaProvider implements LlmProvider {
       this.visionCache.set(model, vision)
       return vision
     } catch {
+      // Network/HTTP failure after retries → fall back to the name heuristic.
       const fallback = heuristicVision(model)
       this.visionCache.set(model, fallback)
       return fallback
@@ -206,7 +261,7 @@ export class OllamaProvider implements LlmProvider {
   }
 
   async generate(request: GenerateRequest): Promise<string> {
-    const timeout = createTimeoutSignal(request.signal, this.config.timeoutMs)
+    const idle = createIdleTimeoutSignal(request.signal, this.config.timeoutMs)
     try {
       const response = await fetch(joinUrl(this.config.endpoint, "/api/generate"), {
         method: "POST",
@@ -225,8 +280,9 @@ export class OllamaProvider implements LlmProvider {
             num_predict: request.options.numPredict,
           },
         }),
-        signal: timeout.signal,
+        signal: idle.signal,
       })
+      idle.kick() // headers received — reset the inactivity window
       if (!response.ok) {
         throw new Error(`Ollama API error ${response.status}: ${await safeErrorBody(response)}`)
       }
@@ -244,6 +300,7 @@ export class OllamaProvider implements LlmProvider {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
+          idle.kick() // progress — a slow but live stream must never time out
           buffer += decoder.decode(value, { stream: true })
           const { lines, rest } = takeLines(buffer)
           buffer = rest
@@ -272,13 +329,16 @@ export class OllamaProvider implements LlmProvider {
       return full
     } catch (err: any) {
       if (err?.name === "AbortError") {
-        throw new Error(
-          `Request timed out after ${Math.round(this.config.timeoutMs / 1000)}s or was cancelled.`
-        )
+        if (idle.state.timedOut) {
+          throw new Error(
+            `No data from Ollama for ${Math.round(this.config.timeoutMs / 1000)}s (connection stalled).`
+          )
+        }
+        throw new Error("Request cancelled.")
       }
       throw err
     } finally {
-      timeout.cleanup()
+      idle.cleanup()
     }
   }
 }
@@ -290,33 +350,35 @@ export class OpenAICompatibleProvider implements LlmProvider {
   ) {}
 
   async listModels(): Promise<ModelInfo[]> {
-    const headers = this.headers()
-    const timeout = createTimeoutSignal(undefined, Math.min(this.config.timeoutMs, 15_000))
-    try {
-      const response = await fetch(joinUrl(this.config.endpoint, "/models"), {
-        headers,
-        signal: timeout.signal,
+    const entries: any[] = await withDiscoveryRetry(async () => {
+      const idle = createIdleTimeoutSignal(undefined, discoveryIdleMs(this.config.timeoutMs))
+      try {
+        const response = await fetch(joinUrl(this.config.endpoint, "/models"), {
+          headers: this.headers(),
+          signal: idle.signal,
+        })
+        idle.kick()
+        if (!response.ok)
+          throw new Error(
+            `Model discovery failed: ${response.status} ${await safeErrorBody(response)}`
+          )
+        const data: any = await response.json()
+        return Array.isArray(data.data) ? data.data : []
+      } finally {
+        idle.cleanup()
+      }
+    })
+    return entries
+      .map((entry) => {
+        const name = String(entry?.id ?? "")
+        // Provider modality metadata (OpenRouter architecture.input_modalities)
+        // is authoritative; fall back to a name/config heuristic only when the
+        // endpoint returns no modality info (vanilla OpenAI, LM Studio, …).
+        const vision =
+          visionFromModality(entry) ?? (heuristicVision(name) || name === this.config.visionModel)
+        return { providerId: this.config.id, name, vision, capabilities: capabilitiesFor(vision) }
       })
-      if (!response.ok)
-        throw new Error(
-          `Model discovery failed: ${response.status} ${await safeErrorBody(response)}`
-        )
-      const data: any = await response.json()
-      const names: string[] = Array.isArray(data.data)
-        ? data.data.map((m: any) => String(m.id))
-        : []
-      return names.map((name) => {
-        const vision = heuristicVision(name) || name === this.config.visionModel
-        return {
-          providerId: this.config.id,
-          name,
-          vision,
-          capabilities: capabilitiesFor(vision),
-        }
-      })
-    } finally {
-      timeout.cleanup()
-    }
+      .filter((m) => m.name)
   }
 
   async healthCheck(): Promise<ProviderHealth> {
@@ -353,7 +415,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
     if (this.config.apiKeyRequired && !this.getApiKey()) {
       throw new Error(`${this.config.name} requires an API key.`)
     }
-    const timeout = createTimeoutSignal(request.signal, this.config.timeoutMs)
+    const idle = createIdleTimeoutSignal(request.signal, this.config.timeoutMs)
     try {
       const content =
         request.images && request.images.length > 0
@@ -382,8 +444,9 @@ export class OpenAICompatibleProvider implements LlmProvider {
         method: "POST",
         headers: { ...this.headers(), "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: timeout.signal,
+        signal: idle.signal,
       })
+      idle.kick() // headers received — reset the inactivity window
       if (!response.ok) {
         throw new Error(`Provider API error ${response.status}: ${await safeErrorBody(response)}`)
       }
@@ -393,16 +456,19 @@ export class OpenAICompatibleProvider implements LlmProvider {
         if (!content) throw new Error("No response content received from provider.")
         return content
       }
-      return this.readSse(response, request.onToken)
+      return this.readSse(response, request.onToken, idle.kick)
     } catch (err: any) {
       if (err?.name === "AbortError") {
-        throw new Error(
-          `Request timed out after ${Math.round(this.config.timeoutMs / 1000)}s or was cancelled.`
-        )
+        if (idle.state.timedOut) {
+          throw new Error(
+            `No data from ${this.config.name} for ${Math.round(this.config.timeoutMs / 1000)}s (connection stalled).`
+          )
+        }
+        throw new Error("Request cancelled.")
       }
       throw err
     } finally {
-      timeout.cleanup()
+      idle.cleanup()
     }
   }
 
@@ -411,7 +477,11 @@ export class OpenAICompatibleProvider implements LlmProvider {
     return key ? { Authorization: `Bearer ${key}` } : {}
   }
 
-  private async readSse(response: Response, onToken?: (token: string) => void): Promise<string> {
+  private async readSse(
+    response: Response,
+    onToken?: (token: string) => void,
+    kick?: () => void
+  ): Promise<string> {
     const reader = response.body?.getReader()
     if (!reader) throw new Error("No response body reader available.")
     const decoder = new TextDecoder()
@@ -421,6 +491,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+        kick?.() // progress — a slow but live stream must never time out
         buffer += decoder.decode(value, { stream: true })
         const { lines, rest } = takeLines(buffer)
         buffer = rest

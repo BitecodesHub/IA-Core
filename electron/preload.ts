@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron"
 import type { AppSettings, ShortcutActionId, Binding } from "./config/schema"
-import type { ModelInfo, ProviderHealth } from "./llm/providers"
+import type { ModelDiscoveryResult, ProviderHealth } from "./llm/providers"
 import type {
   ShortcutsSnapshot,
   SetShortcutResult,
@@ -28,6 +28,8 @@ interface ElectronAPI {
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>
   copyToClipboard: (text: string) => Promise<{ ok: boolean; error?: string }>
+  /** Blink positional dots for a detected MCQ answer (letters A–E). Fire-and-forget. */
+  showMcqHint: (letters: string[]) => void
   onScreenshotTaken: (callback: (data: { path: string; preview: string }) => void) => () => void
   onSolutionsReady: (callback: (solutions: string) => void) => () => void
   onResetView: (callback: () => void) => () => void
@@ -61,7 +63,7 @@ interface ElectronAPI {
   getCurrentLlmConfig: () => Promise<{ provider: string; model: string; isOllama: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
   getOllamaModelsDetailed: () => Promise<Array<{ name: string; vision: boolean }>>
-  getAiProviderModels: (providerId?: string) => Promise<ModelInfo[]>
+  getAiProviderModels: (providerId?: string) => Promise<ModelDiscoveryResult>
   getAiProviderHealth: (providerId?: string) => Promise<ProviderHealth>
   getAiProvidersHealth: () => Promise<ProviderHealth[]>
   setAiProviderApiKey: (
@@ -91,13 +93,6 @@ interface ElectronAPI {
   importSettings: (
     data: unknown
   ) => Promise<{ ok: boolean; settings?: AppSettings; error?: string }>
-  exportSettingsToFile: () => Promise<{ ok: boolean; filePath?: string; canceled?: boolean }>
-  importSettingsFromFile: () => Promise<{
-    ok: boolean
-    settings?: AppSettings
-    canceled?: boolean
-    error?: string
-  }>
   onSettingsChanged: (callback: (settings: AppSettings) => void) => () => void
 
   // Shortcuts
@@ -112,10 +107,6 @@ interface ElectronAPI {
   setMoveStep: (px: number) => Promise<{ ok: boolean; moveStep: number }>
   exportShortcuts: () => Promise<ShortcutExport>
   importShortcuts: (data: unknown) => Promise<ImportResult>
-  exportShortcutsToFile: () => Promise<{ ok: boolean; filePath?: string; canceled?: boolean }>
-  importShortcutsFromFile: () => Promise<
-    ImportResult | { ok: false; canceled?: boolean; error?: string }
-  >
   onShortcutsStatusChanged: (callback: (report: RegistrationReport) => void) => () => void
 
   /** Streamed local chat. Returns a cancel function. */
@@ -145,6 +136,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getScreenshots: () => ipcRenderer.invoke("get-screenshots"),
   deleteScreenshot: (path: string) => ipcRenderer.invoke("delete-screenshot", path),
   copyToClipboard: (text: string) => ipcRenderer.invoke("clipboard:write", text),
+  showMcqHint: (letters: string[]) => ipcRenderer.send("mcq:hint", letters),
 
   // Event listeners
   onScreenshotTaken: (callback: (data: { path: string; preview: string }) => void) => {
@@ -284,8 +276,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   resetSettings: (section?: keyof AppSettings) => ipcRenderer.invoke("settings:reset", section),
   exportSettings: () => ipcRenderer.invoke("settings:export"),
   importSettings: (data: unknown) => ipcRenderer.invoke("settings:import", data),
-  exportSettingsToFile: () => ipcRenderer.invoke("settings:exportToFile"),
-  importSettingsFromFile: () => ipcRenderer.invoke("settings:importFromFile"),
   onSettingsChanged: (callback: (settings: AppSettings) => void) => {
     const subscription = (_: any, settings: AppSettings) => callback(settings)
     ipcRenderer.on("settings:changed", subscription)
@@ -303,8 +293,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setMoveStep: (px: number) => ipcRenderer.invoke("shortcuts:setMoveStep", px),
   exportShortcuts: () => ipcRenderer.invoke("shortcuts:export"),
   importShortcuts: (data: unknown) => ipcRenderer.invoke("shortcuts:import", data),
-  exportShortcutsToFile: () => ipcRenderer.invoke("shortcuts:exportToFile"),
-  importShortcutsFromFile: () => ipcRenderer.invoke("shortcuts:importFromFile"),
   onShortcutsStatusChanged: (callback: (report: RegistrationReport) => void) => {
     const subscription = (_: any, report: RegistrationReport) => callback(report)
     ipcRenderer.on("shortcuts:status-changed", subscription)

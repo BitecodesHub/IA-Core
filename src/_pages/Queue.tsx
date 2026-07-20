@@ -8,6 +8,7 @@ import { useToast } from "../hooks/useToast"
 import { useScreenshots } from "../hooks/useScreenshots"
 import { useLocalShortcuts } from "../hooks/useLocalShortcuts"
 import { extractCodeBlocks } from "../lib/extractCode"
+import { parseMcqAnswer } from "../lib/mcqAnswer"
 
 interface QueueProps {
   setView: React.Dispatch<React.SetStateAction<"queue" | "solutions" | "debug">>
@@ -23,8 +24,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   const activeProviderId = settings?.ai.activeProviderId ?? "ollama"
   const mode: "offline" | "online" = activeProviderId === "ollama" ? "offline" : "online"
 
-  const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const [tooltipHeight, setTooltipHeight] = useState(0)
   const contentRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
@@ -38,6 +37,8 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   const screenshotAbortControllerRef = useRef<AbortController | null>(null)
   // Ids of assistant messages already scanned for code (copied once, silently).
   const copiedCodeRef = useRef<Set<number>>(new Set())
+  // Ids of assistant messages already scanned for an MCQ answer (hinted once).
+  const hintedMcqRef = useRef<Set<number>>(new Set())
 
   const handleChatSend = async () => {
     if (!chatInput.trim()) return
@@ -177,22 +178,20 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     })
   }
 
-  // Window dimension sync — depends on tooltip state, so it re-runs on toggle.
+  // Window dimension sync — a ResizeObserver reports content growth.
   useEffect(() => {
     const update = () => {
       if (!contentRef.current) return
-      let h = contentRef.current.scrollHeight
-      if (isTooltipVisible) h += tooltipHeight
       window.electronAPI.updateContentDimensions({
         width: contentRef.current.scrollWidth,
-        height: h,
+        height: contentRef.current.scrollHeight,
       })
     }
     const ro = new ResizeObserver(update)
     if (contentRef.current) ro.observe(contentRef.current)
     update()
     return () => ro.disconnect()
-  }, [isTooltipVisible, tooltipHeight])
+  }, [])
 
   // IPC listeners — registered ONCE (not coupled to tooltip state, which would
   // tear them down and re-subscribe on every tooltip toggle).
@@ -370,10 +369,18 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     }
   }, [chatMessages])
 
-  const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
-    setIsTooltipVisible(visible)
-    setTooltipHeight(height)
-  }
+  // When a completed answer is multiple-choice, blink positional dots on the
+  // stealth overlay (A=top-left … E=centre) so the option is conveyed without
+  // reading text. Each message is hinted at most once. Mirrors the code-copy pass.
+  useEffect(() => {
+    for (const m of chatMessages) {
+      if (m.role !== "assistant" || m.isStreaming || m.id == null) continue
+      if (hintedMcqRef.current.has(m.id)) continue
+      hintedMcqRef.current.add(m.id)
+      const mcq = parseMcqAnswer(m.text)
+      if (mcq) window.electronAPI.showMcqHint(mcq.letters)
+    }
+  }, [chatMessages])
 
   return (
     <div
@@ -395,7 +402,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
         <QueueCommands
           screenshots={screenshots}
           mode={mode}
-          onTooltipVisibilityChange={handleTooltipVisibilityChange}
           onChatToggle={() => setIsChatOpen((v) => !v)}
           onSettingsToggle={() => setIsSettingsOpen((v) => !v)}
         />

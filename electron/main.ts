@@ -6,6 +6,7 @@ import { WindowHelper } from "./WindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
 import { ShortcutsHelper } from "./shortcuts/ShortcutsHelper"
 import { ProcessingHelper } from "./ProcessingHelper"
+import { HintOverlayHelper, type HintLetter } from "./HintOverlayHelper"
 import { SettingsService } from "./config/SettingsService"
 import { SecretStore } from "./config/SecretStore"
 import { shouldSeedProviderKey } from "./config/seed"
@@ -42,6 +43,7 @@ export class AppState {
   private screenshotHelper: ScreenshotHelper
   public shortcutsHelper: ShortcutsHelper
   public processingHelper: ProcessingHelper
+  private hintOverlay: HintOverlayHelper
   private tray: Tray | null = null
 
   // View management
@@ -72,6 +74,10 @@ export class AppState {
 
     // Initialize ShortcutsHelper
     this.shortcutsHelper = new ShortcutsHelper(this)
+
+    // MCQ answer hint overlay. Positions onto whichever display currently holds
+    // the main overlay window; falls back to the primary display.
+    this.hintOverlay = new HintOverlayHelper(() => this.getMainWindow()?.getBounds() ?? null)
   }
 
   public static getInstance(): AppState {
@@ -266,6 +272,15 @@ export class AppState {
     }
   }
 
+  /** Blink positional dots for a detected multiple-choice answer. */
+  public showMcqHint(letters: HintLetter[]): void {
+    this.hintOverlay.blink(letters)
+  }
+
+  public destroyHintOverlay(): void {
+    this.hintOverlay.destroy()
+  }
+
   public setHasDebugged(value: boolean): void {
     this.hasDebugged = value
   }
@@ -303,7 +318,17 @@ async function initializeApp() {
     if (changedPaths.includes("window.trayEnabled")) {
       appState.createTray()
     }
-    if (changedPaths.some((p) => p.startsWith("ai."))) {
+    // Only re-discover when something that affects the model catalog or which
+    // provider is used changes — not on a temperature/model-slot tweak, which
+    // would needlessly re-hit the network on every keystroke-commit.
+    if (
+      changedPaths.some(
+        (p) =>
+          p === "ai.activeProviderId" ||
+          p.startsWith("ai.fallbackProviderIds") ||
+          /^ai\.providers\.[^.]+\.(endpoint|enabled|type|allowRemote)$/.test(p)
+      )
+    ) {
       appState.processingHelper.getLLMHelper().invalidateProviderCache()
     }
     // Re-register global shortcuts when BINDINGS change via a settings import/reset
@@ -324,7 +349,17 @@ async function initializeApp() {
   // Initialize IPC handlers before window creation
   initializeIpcHandlers(appState)
 
-  app.whenReady().then(() => {
+    // Stealth: replace the default application menu with a minimal one. This drops
+    // the View menu (Reload / Toggle-DevTools accelerators) and other footprint,
+    // but KEEPS the Edit menu — its cut/copy/paste/selectAll roles are what wire
+    // the standard Cmd+C/V/X/A accelerators for native text fields on macOS (the
+    // API-key field and the in-overlay import textarea rely on paste). DevTools is
+    // independently disabled via webPreferences.devTools in production.
+    app.whenReady().then(() => {
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }])
+    )
+
     // Serve the renderer over a real app:// origin in production. Loading the
     // bundle from file:// breaks a strict CSP ('self' never matches the opaque
     // file:// origin → scripts blocked → blank window) and trips CORS on Vite's
@@ -405,6 +440,7 @@ async function initializeApp() {
   // Graceful shutdown: persist any pending settings write durably.
   app.on("before-quit", () => {
     settings.flushSync()
+    appState.destroyHintOverlay()
   })
 
   app.dock?.hide() // Accessory app: no dock icon

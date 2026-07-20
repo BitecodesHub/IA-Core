@@ -115,6 +115,9 @@
   "description": "",
   "devDependencies": {
     "@eslint/js": "^9.15.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/color": "^4.2.0",
     "@types/diff": "^6.0.0",
     "@types/node": "^22.9.0",
@@ -133,6 +136,7 @@
     "electron-builder": "^25.1.8",
     "electron-is-dev": "^3.0.1",
     "eslint": "^9.15.0",
+    "jsdom": "^25.0.1",
     "postcss": "^8.4.49",
     "prettier": "^3.3.3",
     "rimraf": "^6.0.1",

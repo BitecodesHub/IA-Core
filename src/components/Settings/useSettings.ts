@@ -18,8 +18,14 @@ export function useSettings() {
   }, [])
 
   const update = useCallback(async (patch: DeepPartial<AppSettings>) => {
-    const next = await window.electronAPI.setSettings(patch)
-    setSettings(next)
+    try {
+      const next = await window.electronAPI.setSettings(patch)
+      setSettings(next)
+    } catch (err) {
+      // Keep the prior state rather than crashing the panel on an IPC failure.
+      // (Stealth: no user-facing dialog; log only in development.)
+      if (import.meta.env?.DEV) console.error("[useSettings] update failed:", err)
+    }
   }, [])
 
   return { settings, update }

@@ -67,6 +67,53 @@ describe("pickModel — remote provider hardening", () => {
   })
 })
 
+describe("pickModel — remote Auto safety (curated recommendation)", () => {
+  const auto = () => cfg({ visionModel: "", highModel: "", lowModel: "" })
+  const REC = "anthropic/claude-sonnet-5"
+
+  it("resolves an empty (Auto) slot to the recommendation instead of throwing", () => {
+    expect(
+      pickModel({ config: auto(), hasImage: false, configured: "", models: [], recommended: REC })
+    ).toBe(REC)
+  })
+
+  it("prefers the recommendation over an arbitrary discovered model for Auto", () => {
+    const models = [model("some/other-a"), model("some/other-b")]
+    expect(
+      pickModel({ config: auto(), hasImage: false, configured: "", models, recommended: REC })
+    ).toBe(REC)
+  })
+
+  it("uses the recommendation for a remote image task when no vision model is configured", () => {
+    const models = [model("some/text-only")]
+    expect(
+      pickModel({ config: auto(), hasImage: true, configured: "", models, recommended: REC })
+    ).toBe(REC)
+  })
+
+  it("still throws when Auto has neither a configured nor a recommended model", () => {
+    expect(() =>
+      pickModel({ config: auto(), hasImage: false, configured: "", models: [], recommended: "" })
+    ).toThrow(/no model configured/)
+    expect(() =>
+      pickModel({ config: auto(), hasImage: true, configured: "", models: [], recommended: "" })
+    ).toThrow(/no vision-capable model/)
+  })
+
+  it("still prefers an explicitly configured model over the recommendation", () => {
+    const models = [model("anthropic/claude-opus-4.8", true)]
+    expect(
+      pickModel({
+        config: cfg(),
+        hasImage: false,
+        configured: "anthropic/claude-opus-4.8",
+        models,
+        recommended: REC,
+      })
+    ).toBe("anthropic/claude-opus-4.8")
+  })
+})
+
 describe("pickModel — Ollama permissive fallback", () => {
   const ollama = (over: Partial<AiProviderSettings> = {}) =>
     cfg({ id: "ollama", type: "ollama", visionModel: "", highModel: "", lowModel: "", ...over })

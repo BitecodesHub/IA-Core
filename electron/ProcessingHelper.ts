@@ -4,6 +4,7 @@ import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { AudioService } from "./audio/AudioService"
 import { SettingsService } from "./config/SettingsService"
+import { isTransientError } from "./llm/retry"
 import sharp from "sharp"
 
 // Stealth: screenshot file paths embed the OS username (via userData). Keep them
@@ -56,7 +57,7 @@ export class ProcessingHelper {
           })
           return
         } catch (err: any) {
-          console.error("Audio processing error:", err)
+          if (isDev) console.error("Audio processing error:", err)
           mainWindow.webContents.send(
             this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
             err.message
@@ -113,7 +114,7 @@ export class ProcessingHelper {
         this.appState.setHasDebugged(true)
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS, debugResult)
       } catch (error: any) {
-        console.error("Debug processing error:", error)
+        if (isDev) console.error("Debug processing error:", error)
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_ERROR, error.message)
       } finally {
         this.currentExtraProcessingAbortController = null
@@ -207,10 +208,21 @@ export class ProcessingHelper {
     this.currentProcessingAbortController = new AbortController()
 
     try {
-      // Test connection first
+      // Pre-flight connectivity probe. A terminal problem (missing/invalid API
+      // key, auth) is surfaced immediately with a friendly message. A transient
+      // one (slow link, timeout, 5xx) is NOT fatal: the streaming generation path
+      // below has an idle timeout and robust retries and frequently succeeds on a
+      // slow connection where this quick probe did not — so we proceed instead of
+      // blocking the answer on a flaky health check.
       const connectionTest = await this.llmHelper.testConnection()
       if (!connectionTest.success) {
-        throw new Error(`LLM connection failed: ${connectionTest.error}`)
+        const reason = connectionTest.error ?? "unknown error"
+        if (!isTransientError(reason)) {
+          throw new Error(`LLM connection failed: ${reason}`)
+        }
+        if (isDev) {
+          console.log("[ProcessingHelper] Pre-flight probe failed transiently; proceeding:", reason)
+        }
       }
 
       // Resolve a vision-capable model now (self-heals if capabilities aren't cached yet).
@@ -220,7 +232,7 @@ export class ProcessingHelper {
       // Start streaming analysis and send updates to Solutions view
       await this.streamImageAnalysisToSolutions(lastPath, mainWindow, analysisType)
     } catch (error: any) {
-      console.error("Image processing error:", error)
+      if (isDev) console.error("Image processing error:", error)
 
       // Remediation depends on the active provider: online (OpenRouter) failures
       // must not tell the user to fix Ollama, and vice versa.
@@ -324,7 +336,12 @@ Rules:
 • Math problem → show the key calculation steps, then the final numerical answer
 • Any other question → reply with a direct, concise answer
 
-CRITICAL: Read the question EXACTLY as written. Do not misread options. Do not skip words. Do not invent information that is not on screen. If you are unsure between options, re-read the screenshot text carefully before deciding.`,
+CRITICAL: Read the question EXACTLY as written. Do not misread options. Do not skip words. Do not invent information that is not on screen. If you are unsure between options, re-read the screenshot text carefully before deciding.
+
+MACHINE MARKER (MANDATORY LAST LINE): After your answer, output on its own final line an HTML comment encoding the multiple-choice selection so downstream tooling can act on it:
+• Multiple-choice → <!--MCQ:X--> where X is the selected option letter(s). Use the letter(s) exactly as labelled in the question (A, B, C, D, or E). For more than one correct option, comma-separate them, e.g. <!--MCQ:A,C-->.
+• Not multiple-choice (coding, math, true/false, fill-in-the-blank, open question) → <!--MCQ:NONE-->
+Output the marker verbatim as an HTML comment and nothing after it. Only options labelled A through E map to a marker; if the question uses other labels, output <!--MCQ:NONE-->.`,
       }
 
       // Send initial problem info with empty text
@@ -379,7 +396,7 @@ CRITICAL: Read the question EXACTLY as written. Do not misread options. Do not s
       this.appState.setProblemInfo(finalProblemInfo)
       if (isDev) console.log("[ProcessingHelper] Streaming image analysis completed successfully")
     } catch (error) {
-      console.error("[ProcessingHelper] Streaming image analysis error:", error)
+      if (isDev) console.error("[ProcessingHelper] Streaming image analysis error:", error)
       throw error
     }
   }

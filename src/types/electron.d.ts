@@ -10,7 +10,7 @@ import type {
   ImportResult,
 } from "../../electron/shortcuts/types"
 import type { AcceleratorValidation } from "../../electron/shortcuts/validation"
-import type { ModelInfo, ProviderHealth } from "../../electron/llm/providers"
+import type { ModelDiscoveryResult, ProviderHealth } from "../../electron/llm/providers"
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
 
@@ -20,6 +20,8 @@ export interface ElectronAPI {
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>
   copyToClipboard: (text: string) => Promise<{ ok: boolean; error?: string }>
+  /** Blink positional dots for a detected MCQ answer (letters A–E). Fire-and-forget. */
+  showMcqHint: (letters: string[]) => void
   takeScreenshot: () => Promise<void>
   moveWindowLeft: () => Promise<void>
   moveWindowRight: () => Promise<void>
@@ -66,7 +68,7 @@ export interface ElectronAPI {
   }>
   getAvailableOllamaModels: () => Promise<string[]>
   getOllamaModelsDetailed: () => Promise<Array<{ name: string; vision: boolean }>>
-  getAiProviderModels: (providerId?: string) => Promise<ModelInfo[]>
+  getAiProviderModels: (providerId?: string) => Promise<ModelDiscoveryResult>
   getAiProviderHealth: (providerId?: string) => Promise<ProviderHealth>
   getAiProvidersHealth: () => Promise<ProviderHealth[]>
   setAiProviderApiKey: (
@@ -89,13 +91,6 @@ export interface ElectronAPI {
   importSettings: (
     data: unknown
   ) => Promise<{ ok: boolean; settings?: AppSettings; error?: string }>
-  exportSettingsToFile: () => Promise<{ ok: boolean; filePath?: string; canceled?: boolean }>
-  importSettingsFromFile: () => Promise<{
-    ok: boolean
-    settings?: AppSettings
-    canceled?: boolean
-    error?: string
-  }>
   onSettingsChanged: (callback: (settings: AppSettings) => void) => () => void
 
   // Shortcuts
@@ -110,10 +105,6 @@ export interface ElectronAPI {
   setMoveStep: (px: number) => Promise<{ ok: boolean; moveStep: number }>
   exportShortcuts: () => Promise<ShortcutExport>
   importShortcuts: (data: unknown) => Promise<ImportResult>
-  exportShortcutsToFile: () => Promise<{ ok: boolean; filePath?: string; canceled?: boolean }>
-  importShortcutsFromFile: () => Promise<
-    ImportResult | { ok: false; canceled?: boolean; error?: string }
-  >
   onShortcutsStatusChanged: (callback: (report: RegistrationReport) => void) => () => void
 
   /** Streamed local chat. Returns a cancel function. */

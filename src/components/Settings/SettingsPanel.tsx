@@ -6,6 +6,8 @@ import ShortcutsTab from "./ShortcutsTab"
 import WindowTab from "./WindowTab"
 import PrivacyTab from "./PrivacyTab"
 import DiagnosticsTab from "./DiagnosticsTab"
+import { useImportExport } from "./useImportExport"
+import ImportExportPanel from "./ImportExportPanel"
 
 type Tab = "general" | "ai" | "shortcuts" | "window" | "privacy" | "diagnostics"
 
@@ -24,16 +26,10 @@ const SettingsPanel: React.FC = () => {
   const [search, setSearch] = useState("")
   const [notice, setNotice] = useState<string | null>(null)
   const [armReset, setArmReset] = useState(false)
-
-  const exportSettings = async () => {
-    const res = await window.electronAPI.exportSettingsToFile()
-    setNotice(res.ok ? "Settings exported." : res.canceled ? null : "Export failed.")
-  }
-
-  const importSettings = async () => {
-    const res = await window.electronAPI.importSettingsFromFile()
-    setNotice(res.ok ? "Settings imported." : res.canceled ? null : (res.error ?? "Import failed."))
-  }
+  const io = useImportExport(
+    () => window.electronAPI.exportSettings(),
+    (data) => window.electronAPI.importSettings(data)
+  )
 
   const resetAll = async () => {
     // Stealth: no native confirm dialog (it renders outside the content-protected
@@ -62,27 +58,33 @@ const SettingsPanel: React.FC = () => {
         </div>
         <button
           title="Import settings"
-          onClick={importSettings}
-          className="p-1.5 border border-white/30 rounded"
+          aria-label="Import settings"
+          onClick={io.startImport}
+          className="p-1.5 border border-white/30 rounded hover:bg-white/10"
         >
           <Upload className="w-3.5 h-3.5" />
         </button>
         <button
           title="Export settings"
-          onClick={exportSettings}
-          className="p-1.5 border border-white/30 rounded"
+          aria-label="Export settings"
+          onClick={io.startExport}
+          className="p-1.5 border border-white/30 rounded hover:bg-white/10"
         >
           <Download className="w-3.5 h-3.5" />
         </button>
         <button
           title="Restore defaults"
+          aria-label="Restore defaults"
           onClick={resetAll}
-          className="p-1.5 border border-white/30 rounded"
+          className="p-1.5 border border-white/30 rounded hover:bg-white/10"
         >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
       </div>
-      {notice && <div className="mb-2 text-[10px] text-amber-300">{notice}</div>}
+      <ImportExportPanel io={io} entity="settings" />
+      {(notice || io.msg) && (
+        <div className="mb-2 text-[11px] text-amber-300">{io.msg ?? notice}</div>
+      )}
       <div className="flex gap-1 mb-3 border-b border-white/20 pb-2 overflow-x-auto">
         {TABS.map((t) => (
           <button

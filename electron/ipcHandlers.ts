@@ -1,6 +1,6 @@
 // ipcHandlers.ts
 
-import { ipcMain, app, dialog, shell, systemPreferences, clipboard } from "electron"
+import { ipcMain, app, shell, systemPreferences, clipboard } from "electron"
 import path from "node:path"
 import os from "node:os"
 import fs from "node:fs"
@@ -53,14 +53,21 @@ function assertWithinAudioDirs(p: string): string {
 export function initializeIpcHandlers(appState: AppState): void {
   const settings = SettingsService.getInstance()
   const secrets = SecretStore.getInstance()
-  ipcMain.handle(
-    "update-content-dimensions",
-    async (event, { width, height }: { width: number; height: number }) => {
-      if (width && height) {
-        appState.setWindowDimensions(width, height)
-      }
+  ipcMain.handle("update-content-dimensions", async (_event, payload: unknown) => {
+    // Validate: a malformed payload must not reach setWindowDimensions.
+    if (typeof payload !== "object" || payload === null) return
+    const { width, height } = payload as { width?: unknown; height?: unknown }
+    if (
+      typeof width === "number" &&
+      typeof height === "number" &&
+      Number.isFinite(width) &&
+      Number.isFinite(height) &&
+      width > 0 &&
+      height > 0
+    ) {
+      appState.setWindowDimensions(width, height)
     }
-  )
+  })
 
   // Click-through toggle: renderer enables capture only while the cursor is over
   // interactive UI; otherwise clicks pass through the transparent overlay.
@@ -123,6 +130,18 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   })
 
+  // Blink positional dots on a stealth full-screen overlay to convey a detected
+  // multiple-choice answer (A=top-left … E=centre). Renderer-supplied letters are
+  // sanitised to the A–E set here before reaching the overlay.
+  ipcMain.on("mcq:hint", (_event, letters: unknown) => {
+    if (!Array.isArray(letters)) return
+    const valid = letters.filter(
+      (l): l is "A" | "B" | "C" | "D" | "E" =>
+        typeof l === "string" && ["A", "B", "C", "D", "E"].includes(l)
+    )
+    if (valid.length > 0) appState.showMcqHint(valid)
+  })
+
   ipcMain.handle("get-screenshots", async () => {
     if (isDev) console.log({ view: appState.getView() })
     try {
@@ -166,8 +185,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   })
 
   // IPC handler for analyzing audio from base64 data
-  ipcMain.handle("analyze-audio-base64", async (event, data: string, mimeType: string) => {
+  ipcMain.handle("analyze-audio-base64", async (event, data: unknown, mimeType: unknown) => {
     try {
+      if (typeof data !== "string" || typeof mimeType !== "string") {
+        throw new Error("Invalid audio payload.")
+      }
       const result = await appState.processingHelper.processAudioBase64(data, mimeType)
       return result
     } catch (error: any) {
@@ -284,12 +306,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   })
 
   ipcMain.handle("get-ai-provider-models", async (_e, providerId?: string) => {
-    try {
-      return await appState.processingHelper.getLLMHelper().getProviderModelsDetailed(providerId)
-    } catch (error: any) {
-      console.error("Error discovering provider models:", error)
-      return []
-    }
+    // Returns a typed ModelDiscoveryResult so the renderer can distinguish a real
+    // discovery error from a reachable-but-empty catalog.
+    const id = typeof providerId === "string" ? providerId : undefined
+    return appState.processingHelper.getLLMHelper().discoverModelsResult(id)
   })
 
   ipcMain.handle("get-ai-provider-health", async (_e, providerId?: string) => {
@@ -300,8 +320,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     return appState.processingHelper.getLLMHelper().getProvidersHealth()
   })
 
-  ipcMain.handle("ai-provider:set-api-key", async (_e, providerId: string, apiKey: string) => {
-    return secrets.setProviderApiKey(providerId, apiKey)
+  ipcMain.handle("ai-provider:set-api-key", async (_e, providerId: unknown, apiKey: unknown) => {
+    // Coerce defensively: a non-string apiKey would otherwise throw on .trim()
+    // inside SecretStore and reject the IPC.
+    if (typeof providerId !== "string") return { ok: false, error: "Invalid provider id." }
+    return secrets.setProviderApiKey(providerId, String(apiKey ?? ""))
   })
 
   ipcMain.handle("ai-provider:secret-status", async (_e, providerId: string) => {
@@ -348,46 +371,14 @@ export function initializeIpcHandlers(appState: AppState): void {
     return settings.reset(section)
   })
 
+  // Import/export are object-based only (settings:export / settings:import).
+  // The former native-dialog variants (showSaveDialog/showOpenDialog) were removed:
+  // OS file pickers are separate windows NOT covered by content protection and
+  // would appear in a screen share. The renderer now does an in-overlay copy/paste
+  // flow (see useImportExport), which stays inside the content-protected window.
   ipcMain.handle("settings:export", async () => settings.exportSettings())
 
   ipcMain.handle("settings:import", async (_e, data: unknown) => settings.importSettings(data))
-
-  ipcMain.handle("settings:exportToFile", async () => {
-    const data = settings.exportSettings()
-    const win = appState.getMainWindow()
-    const result = win
-      ? await dialog.showSaveDialog(win, {
-          defaultPath: "ia-core-settings.json",
-          filters: [{ name: "JSON", extensions: ["json"] }],
-        })
-      : await dialog.showSaveDialog({ defaultPath: "ia-core-settings.json" })
-    if (result.canceled || !result.filePath) return { ok: false, canceled: true }
-    await fs.promises.writeFile(result.filePath, JSON.stringify(data, null, 2), { mode: 0o600 })
-    return { ok: true, filePath: result.filePath }
-  })
-
-  ipcMain.handle("settings:importFromFile", async () => {
-    const win = appState.getMainWindow()
-    const result = win
-      ? await dialog.showOpenDialog(win, {
-          properties: ["openFile"],
-          filters: [{ name: "JSON", extensions: ["json"] }],
-        })
-      : await dialog.showOpenDialog({ properties: ["openFile"] })
-    if (result.canceled || result.filePaths.length === 0) {
-      return { ok: false, canceled: true }
-    }
-    const stat = await fs.promises.stat(result.filePaths[0])
-    if (stat.size > 1024 * 1024) return { ok: false, error: "Settings file is too large." }
-    const text = await fs.promises.readFile(result.filePaths[0], "utf-8")
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(text)
-    } catch {
-      return { ok: false, error: "File is not valid JSON." }
-    }
-    return settings.importSettings(parsed)
-  })
 
   // --- Shortcuts ----------------------------------------------------------
   ipcMain.handle("shortcuts:getAll", async () => appState.shortcutsHelper.getSnapshot())
@@ -415,41 +406,8 @@ export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle("shortcuts:import", async (_e, data: unknown) => {
     return appState.shortcutsHelper.importShortcuts(data)
   })
-
-  ipcMain.handle("shortcuts:exportToFile", async () => {
-    const data = appState.shortcutsHelper.exportShortcuts()
-    const win = appState.getMainWindow()
-    const result = win
-      ? await dialog.showSaveDialog(win, {
-          defaultPath: "shortcuts.json",
-          filters: [{ name: "JSON", extensions: ["json"] }],
-        })
-      : await dialog.showSaveDialog({ defaultPath: "shortcuts.json" })
-    if (result.canceled || !result.filePath) return { ok: false, canceled: true }
-    await fs.promises.writeFile(result.filePath, JSON.stringify(data, null, 2))
-    return { ok: true, filePath: result.filePath }
-  })
-
-  ipcMain.handle("shortcuts:importFromFile", async () => {
-    const win = appState.getMainWindow()
-    const result = win
-      ? await dialog.showOpenDialog(win, {
-          properties: ["openFile"],
-          filters: [{ name: "JSON", extensions: ["json"] }],
-        })
-      : await dialog.showOpenDialog({ properties: ["openFile"] })
-    if (result.canceled || result.filePaths.length === 0) {
-      return { ok: false, canceled: true }
-    }
-    const text = await fs.promises.readFile(result.filePaths[0], "utf-8")
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(text)
-    } catch {
-      return { ok: false, error: "File is not valid JSON." }
-    }
-    return appState.shortcutsHelper.importShortcuts(parsed)
-  })
+  // Native-dialog shortcuts import/export removed for the same stealth reason as
+  // settings above; the renderer uses the in-overlay copy/paste flow.
 
   // --- Streaming chat: renderer never talks to Ollama directly; tokens are
   // streamed back over per-request channels so the renderer needs no network. ---

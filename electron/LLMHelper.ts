@@ -6,6 +6,8 @@ import type { AiProviderSettings } from "./config/schema"
 import { cleanJsonResponse } from "./llm/parse"
 import { selectModel, type TaskContext, type ModelTiers } from "./llm/router"
 import { pickModel } from "./llm/pick"
+import { isTransientError, backoffDelayMs } from "./llm/retry"
+import { recommendedModels } from "./llm/defaults"
 import { shouldAutoHealthCheck } from "./llm/mode"
 import {
   OllamaProvider,
@@ -13,6 +15,7 @@ import {
   type GenerateOptions,
   type LlmProvider,
   type ModelInfo,
+  type ModelDiscoveryResult,
   type ProviderHealth,
 } from "./llm/providers"
 
@@ -25,6 +28,13 @@ interface GenerateOpts {
   signal?: AbortSignal
   temperatureCap?: number
 }
+
+// Extra retry budget for transient failures, on top of the user's requestRetries
+// setting. Slow networks should recover rather than surface an error, so these are
+// generous; total wall-clock is bounded only by the idle-timeout per attempt.
+const MAX_TRANSIENT_RETRIES = 5
+const RETRY_BASE_MS = 500
+const RETRY_CAP_MS = 8000
 
 /**
  * Provider-aware LLM facade.
@@ -123,28 +133,69 @@ export class LLMHelper {
     }
   }
 
-  private async discoverModels(providerId: string, force = false): Promise<ModelInfo[]> {
+  private async discoverModels(
+    providerId: string,
+    opts: { force?: boolean; retry?: boolean } = {}
+  ): Promise<ModelInfo[]> {
     const cached = this.modelCache.get(providerId)
-    if (!force && cached && Date.now() - cached.at < 30_000) return cached.models
+    if (!opts.force && cached && Date.now() - cached.at < 30_000) return cached.models
     const config = this.settings.get("ai").providers[providerId]
     if (!config || !config.enabled) return []
-    const models = await this.createProvider(config).listModels()
+    const provider = this.createProvider(config)
+
+    // Discovery is normally best-effort and NOT retried (it must not stall the
+    // hot generation path). The UI path opts into a short transient-aware retry
+    // so a slow/flaky link recovers instead of showing an empty list.
+    let attempt = 0
+    let models: ModelInfo[]
+    for (;;) {
+      try {
+        models = await provider.listModels()
+        break
+      } catch (err: any) {
+        const message = err?.message ?? String(err)
+        if (!opts.retry || attempt >= 2 || !isTransientError(message)) throw err
+        attempt++
+        await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, RETRY_BASE_MS, RETRY_CAP_MS)))
+      }
+    }
+
     this.modelCache.set(providerId, { at: Date.now(), models })
-    if (models.length > 0 && !this.autoModels.has(providerId)) {
+    // The "first discovered model" convenience is Ollama-only. For a remote
+    // provider it would let an empty (Auto) slot silently resolve to an arbitrary
+    // billable model; remote Auto is handled by curated defaults instead.
+    if (config.type === "ollama" && models.length > 0 && !this.autoModels.has(providerId)) {
       this.autoModels.set(providerId, models[0].name)
     }
     return models
   }
 
+  /**
+   * Discover models for a provider and report success/failure distinctly, so the
+   * renderer can show a real error state instead of an ambiguous empty list.
+   * Uses force+retry (user-initiated UI refresh path).
+   */
+  public async discoverModelsResult(providerId?: string): Promise<ModelDiscoveryResult> {
+    const id = providerId || this.activeProvider.id
+    try {
+      const models = await this.discoverModels(id, { force: true, retry: true })
+      return { providerId: id, ok: true, models }
+    } catch (err: any) {
+      return { providerId: id, ok: false, models: [], error: err?.message ?? String(err) }
+    }
+  }
+
   private async chooseModel(config: AiProviderSettings, ctx: TaskContext): Promise<string> {
     const configured = selectModel(this.settings.get("ai").reasoningMode, ctx, this.tiers(config))
     const models = await this.discoverModels(config.id).catch((): ModelInfo[] => [])
+    const rec = recommendedModels(config)
     return pickModel({
       config,
       hasImage: ctx.hasImage,
       configured,
       models,
       autoModel: this.autoModels.get(config.id),
+      recommended: rec ? (ctx.hasImage ? rec.vision : rec.high) : "",
     })
   }
 
@@ -175,7 +226,11 @@ export class LLMHelper {
         continue
       }
 
-      for (let attempt = 0; attempt <= retries; attempt++) {
+      // Retry budget: a transient/network failure gets the generous transient
+      // budget so a slow or flaky connection recovers on its own; a terminal
+      // error (auth, bad request) is not retried and moves to the next provider.
+      let attempt = 0
+      while (true) {
         try {
           return await provider.generate({
             prompt,
@@ -191,8 +246,17 @@ export class LLMHelper {
           if (opts.signal?.aborted) throw new Error("Request cancelled.")
           // Never replay a partially-streamed response (would duplicate output).
           if (streamedAny) throw err instanceof Error ? err : new Error(message)
-          if (attempt >= retries) errors.push(`${config.name}/${model}: ${message}`)
-          else await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+          const transient = isTransientError(message)
+          const budget = transient ? Math.max(retries, MAX_TRANSIENT_RETRIES) : retries
+          if (attempt >= budget) {
+            errors.push(`${config.name}/${model}: ${message}`)
+            break // give up on this provider; try the next in the sequence
+          }
+          attempt++
+          // Exponential backoff with jitter, capped, so retries do not hammer a
+          // struggling endpoint while still recovering quickly from a blip.
+          const delay = backoffDelayMs(attempt, RETRY_BASE_MS, RETRY_CAP_MS)
+          await new Promise((resolve) => setTimeout(resolve, delay))
         }
       }
     }
@@ -476,13 +540,13 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
   }
 
   public async getOllamaModels(): Promise<string[]> {
-    return (await this.discoverModels("ollama", true).catch((): ModelInfo[] => [])).map(
+    return (await this.discoverModels("ollama", { force: true }).catch((): ModelInfo[] => [])).map(
       (m) => m.name
     )
   }
 
   public async getOllamaModelsDetailed(): Promise<Array<{ name: string; vision: boolean }>> {
-    return (await this.discoverModels("ollama", true).catch((): ModelInfo[] => [])).map(
+    return (await this.discoverModels("ollama", { force: true }).catch((): ModelInfo[] => [])).map(
       ({ name, vision }) => ({
         name,
         vision,
@@ -492,7 +556,7 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
 
   public async getProviderModelsDetailed(providerId?: string): Promise<ModelInfo[]> {
     const id = providerId || this.activeProvider.id
-    return this.discoverModels(id, true)
+    return this.discoverModels(id, { force: true })
   }
 
   public async getProviderHealth(providerId?: string): Promise<ProviderHealth> {

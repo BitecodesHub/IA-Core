@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest"
-import { cleanJsonResponse, heuristicVision, takeLines } from "../electron/llm/parse"
+import {
+  cleanJsonResponse,
+  heuristicVision,
+  takeLines,
+  visionFromModality,
+} from "../electron/llm/parse"
 
 describe("cleanJsonResponse", () => {
   it("strips ```json fences", () => {
@@ -32,6 +37,29 @@ describe("heuristicVision", () => {
     for (const m of ["llama3.1:8b", "mistral", "qwen2.5:7b"]) {
       expect(heuristicVision(m)).toBe(false)
     }
+  })
+})
+
+describe("visionFromModality", () => {
+  it("returns true when input_modalities includes image (case-insensitive)", () => {
+    expect(visionFromModality({ architecture: { input_modalities: ["text", "image"] } })).toBe(true)
+    expect(visionFromModality({ architecture: { input_modalities: ["Image"] } })).toBe(true)
+  })
+
+  it("returns false when modalities are present but exclude image (metadata is authoritative)", () => {
+    expect(visionFromModality({ architecture: { input_modalities: ["text"] } })).toBe(false)
+  })
+
+  it("supports the legacy modality string", () => {
+    expect(visionFromModality({ architecture: { modality: "text+image->text" } })).toBe(true)
+    expect(visionFromModality({ architecture: { modality: "text->text" } })).toBe(false)
+  })
+
+  it("returns undefined when there is no modality metadata (caller falls back to name heuristic)", () => {
+    expect(visionFromModality({ id: "x" })).toBeUndefined()
+    expect(visionFromModality({ architecture: {} })).toBeUndefined()
+    expect(visionFromModality(null)).toBeUndefined()
+    expect(visionFromModality("nope")).toBeUndefined()
   })
 })
 

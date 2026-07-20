@@ -264,9 +264,10 @@ button:disabled {
 }
 
 /* Dark Theme Background Colors */
-.bg-white {
-  background-color: var(--bg-secondary) !important;
-}
+/* NOTE: `bg-white` is intentionally NOT overridden. It is used only as a true-white
+   inverted highlight (selected chips, the user chat bubble, the send-button, the
+   focused combobox option) whose paired `text-black` must stay readable. Rewriting
+   it to a dark color rendered black-on-black. */
 
 .bg-black {
   background-color: var(--bg-primary) !important;

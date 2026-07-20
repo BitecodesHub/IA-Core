@@ -25,6 +25,26 @@ const App: React.FC = () => {
   const [view, setView] = useState<"queue" | "solutions" | "debug">("queue")
   const containerRef = useRef<HTMLDivElement>(null)
 
+  // Stealth-safe global safety net: swallow unhandled promise rejections / errors
+  // so a stray async IPC failure never surfaces an OS error dialog outside the
+  // content-protected overlay. Mirrors the main-process handlers in main.ts.
+  useEffect(() => {
+    const isDev = import.meta.env?.DEV
+    const onRejection = (e: PromiseRejectionEvent) => {
+      e.preventDefault()
+      if (isDev) console.error("[unhandledrejection]", e.reason)
+    }
+    const onError = (e: ErrorEvent) => {
+      if (isDev) console.error("[window.error]", e.error ?? e.message)
+    }
+    window.addEventListener("unhandledrejection", onRejection)
+    window.addEventListener("error", onError)
+    return () => {
+      window.removeEventListener("unhandledrejection", onRejection)
+      window.removeEventListener("error", onError)
+    }
+  }, [])
+
   useEffect(() => {
     const applyTheme = (theme: GeneralSettings["theme"]) => {
       const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true
