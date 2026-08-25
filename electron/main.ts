@@ -388,7 +388,8 @@ async function initializeApp() {
       let rel = decodeURIComponent(new URL(request.url).pathname)
       if (rel === "/" || rel === "") rel = "/index.html"
       const filePath = path.normalize(path.join(distDir, rel))
-      if (filePath !== distDir && !filePath.startsWith(distDir + path.sep)) {
+      const relativePath = path.relative(distDir, filePath)
+      if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
         return new Response("Forbidden", { status: 403 })
       }
       try {

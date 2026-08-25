@@ -111,6 +111,7 @@ export class WindowHelper {
       alwaysOnTop: winCfg.alwaysOnTop,
       frame: false,
       transparent: true,
+      thickFrame: false,
       fullscreenable: false,
       hasShadow: false,
       backgroundColor: "#00000000",

@@ -153,7 +153,16 @@ export class AudioService {
     for (;;) {
       try {
         await this.downloadFile(url, tmp)
-        await fs.promises.rename(tmp, local)
+        try {
+          await fs.promises.rename(tmp, local)
+        } catch (renameErr: any) {
+          if (["EXDEV", "EPERM", "EBUSY"].includes(renameErr?.code)) {
+            await fs.promises.copyFile(tmp, local)
+            await fs.promises.unlink(tmp).catch(() => {})
+          } else {
+            throw renameErr
+          }
+        }
         return local
       } catch (err: any) {
         await fs.promises.unlink(tmp).catch(() => {})

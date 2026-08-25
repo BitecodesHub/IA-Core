@@ -126,7 +126,18 @@ export class SecretStore {
       } finally {
         fs.closeSync(fd)
       }
-      fs.renameSync(tmp, this.filePath)
+      try {
+        fs.renameSync(tmp, this.filePath)
+      } catch (renameErr: any) {
+        if (["EXDEV", "EPERM", "EBUSY"].includes(renameErr?.code)) {
+          fs.copyFileSync(tmp, this.filePath)
+          try {
+            fs.unlinkSync(tmp)
+          } catch {}
+        } else {
+          throw renameErr
+        }
+      }
       try {
         fs.chmodSync(this.filePath, 0o600)
       } catch {

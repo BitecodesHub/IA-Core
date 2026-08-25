@@ -136,12 +136,16 @@ export class ScreenshotHelper {
         finalPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
       }
 
-      // Move file to final destination; never leak the temp file on failure.
       try {
         await fs.promises.rename(tempPath, finalPath)
-      } catch (renameErr) {
-        await fs.promises.unlink(tempPath).catch(() => {})
-        throw renameErr
+      } catch (renameErr: any) {
+        if (["EXDEV", "EPERM", "EBUSY"].includes(renameErr?.code)) {
+          await fs.promises.copyFile(tempPath, finalPath)
+          await fs.promises.unlink(tempPath).catch(() => {})
+        } else {
+          await fs.promises.unlink(tempPath).catch(() => {})
+          throw renameErr
+        }
       }
 
       if (this.view === "queue") {
