@@ -316,7 +316,8 @@ export class WindowHelper {
 
     // Re-assert content protection: it can be reset by the OS across show/hide.
     this.mainWindow.setContentProtection(this.settings.get("window").contentProtection)
-    this.mainWindow.showInactive()
+    this.mainWindow.show()
+    this.mainWindow.setAlwaysOnTop(true)
 
     this.isWindowVisible = true
   }
@@ -404,7 +405,8 @@ export class WindowHelper {
     // reveal path (tray, second-instance, Center & Show shortcut) must not show the
     // overlay unprotected — matching showMainWindow().
     this.mainWindow.setContentProtection(this.settings.get("window").contentProtection)
-    this.mainWindow.showInactive()
+    this.mainWindow.show()
+    this.mainWindow.focus()
     this.mainWindow.setAlwaysOnTop(true)
     this.isWindowVisible = true
 

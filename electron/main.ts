@@ -455,10 +455,6 @@ async function initializeApp() {
   }
   app.commandLine.appendSwitch("disable-background-timer-throttling")
   app.commandLine.appendSwitch("disable-renderer-backgrounding")
-  app.commandLine.appendSwitch(
-    "disable-features",
-    "CalculateNativeWinOcclusion,WidgetLayering"
-  )
 }
 
 // Start the application
