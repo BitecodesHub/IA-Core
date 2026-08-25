@@ -37,7 +37,7 @@ function classify(text) {
 function run(cmd, args) {
   try {
     return execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 20000 });
-  } catch (e) {
+  } catch {
     return '';
   }
 }
@@ -59,7 +59,7 @@ function detectDarwin() {
   const adapters = [];
   const displays = [];
   let parsed = null;
-  try { parsed = JSON.parse(out); } catch (e) { parsed = null; }
+  try { parsed = JSON.parse(out); } catch { parsed = null; }
   const gpus = (parsed && parsed.SPDisplaysDataType) || [];
   for (const gpu of gpus) {
     const gpuName = gpu._name || pick(gpu, ['model']) || 'unknown-gpu';
@@ -112,7 +112,7 @@ function detectWindows() {
   ].join(' ');
   const out = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
   let parsed = null;
-  try { parsed = JSON.parse(out); } catch (e) { parsed = null; }
+  try { parsed = JSON.parse(out); } catch { parsed = null; }
   const asArr = (x) => (Array.isArray(x) ? x : x ? [x] : []);
   const adapters = asArr(parsed && parsed.adapters).map((a) => ({ name: a.name || '', driver: a.driver || '', categories: classify(`${a.name} ${a.compat} ${a.pnp}`) }));
   asArr(parsed && parsed.indirect).forEach((i) => adapters.push({ name: i.name || '', driver: i.service || '', categories: classify(`${i.name} ${i.service}`).concat(['virtual-display-driver']) }));

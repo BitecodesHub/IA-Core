@@ -1,8 +1,6 @@
-// Flat ESLint config (ESLint v9+). Kept intentionally lean: type-aware linting
-// is expensive and this codebase favors fast feedback. Correctness is enforced
-// primarily by `tsc`; ESLint catches stylistic and obvious-bug issues.
 const js = require("@eslint/js")
 const tseslint = require("typescript-eslint")
+const globals = require("globals")
 
 module.exports = [
   {
@@ -21,6 +19,10 @@ module.exports = [
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
+      globals: {
+        ...globals.node,
+        ...globals.browser,
+      },
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
@@ -33,3 +35,4 @@ module.exports = [
     },
   },
 ]
+
