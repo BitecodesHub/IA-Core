@@ -1,6 +1,7 @@
 import { BrowserWindow, screen } from "electron"
 import { AppState } from "main"
 import path from "node:path"
+import fs from "node:fs"
 import { SettingsService } from "./config/SettingsService"
 
 const isDev = process.env.NODE_ENV === "development"
@@ -138,7 +139,8 @@ export class WindowHelper {
     }
     const denyForeign = (e: Electron.Event, url: string) => {
       try {
-        if (new URL(url).origin !== allowedOrigin) e.preventDefault()
+        const origin = new URL(url).origin
+        if (origin !== "app://bundle" && origin !== allowedOrigin) e.preventDefault()
       } catch {
         e.preventDefault()
       }
@@ -173,9 +175,10 @@ export class WindowHelper {
     this.mainWindow.setSkipTaskbar(winCfg.skipTaskbar)
     this.mainWindow.setAlwaysOnTop(winCfg.alwaysOnTop)
 
+    let activeUrl = startUrl
     const loadAppUrl = () => {
       if (!this.mainWindow || this.mainWindow.isDestroyed()) return
-      this.mainWindow.loadURL(startUrl).catch((err) => {
+      this.mainWindow.loadURL(activeUrl).catch((err) => {
         if (isDev) console.error("Failed to load URL:", err)
       })
     }
@@ -184,9 +187,22 @@ export class WindowHelper {
     // main-process log — a blank window is almost always one of these, and the
     // root-content count catches a silently failed render (0 = blank).
     this.mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
+      if (code === -102 && activeUrl !== "app://bundle/index.html") {
+        const bundlePath = path.join(__dirname, "../dist/index.html")
+        if (fs.existsSync(bundlePath)) {
+          if (isDev) {
+            console.log(
+              `[WindowHelper] Dev server at ${url} not running. Falling back to local bundle app://bundle/index.html`
+            )
+          }
+          activeUrl = "app://bundle/index.html"
+          loadAppUrl()
+          return
+        }
+      }
       if (isDev && code === -102) {
         console.warn(
-          `[WindowHelper] Dev server not reachable at ${url}. Retrying in 2s... (Tip: run "npm start" to launch dev server + Electron together)`
+          `[WindowHelper] Dev server not reachable at ${url} and built bundle not found. Retrying in 2s...`
         )
         setTimeout(() => {
           if (this.mainWindow && !this.mainWindow.isDestroyed()) {
