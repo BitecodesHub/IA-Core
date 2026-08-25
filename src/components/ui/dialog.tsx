@@ -28,6 +28,10 @@ const DialogContent = React.forwardRef<
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      // Radix portals to <body>, outside every data-overlay-interactive region;
+      // without the tag the click-through hit-test (App.tsx) would let clicks and
+      // wheel pass through the dialog to the app behind the overlay.
+      data-overlay-interactive
       className={cn(
         "fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2",
         "bg-black/60 p-4 rounded-lg shadow-lg",

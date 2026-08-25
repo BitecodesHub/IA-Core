@@ -209,6 +209,11 @@ const Combobox: React.FC<ComboboxProps> = ({
             role="listbox"
             aria-label={ariaLabel}
             style={menuStyle}
+            // The portal escapes every data-overlay-interactive container, and the
+            // window's click-through hit-test (App.tsx) only captures the mouse over
+            // tagged elements — untagged, the open menu forwards hover but lets
+            // clicks and wheel fall through the overlay to the app behind it.
+            data-overlay-interactive
             className="z-50 overflow-y-auto bg-black border border-white/30 rounded shadow-lg text-xs"
           >
             {visible.length === 0 && (

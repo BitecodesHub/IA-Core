@@ -91,6 +91,17 @@ describe("Combobox", () => {
     expect(screen.getByRole("option", { name: /x\/custom-model \(configured\)/ })).toBeInTheDocument()
   })
 
+  it("tags the portalled listbox as overlay-interactive so the click-through window keeps mouse capture over it", async () => {
+    const user = userEvent.setup()
+    render(<Harness models={MODELS} />)
+    await user.click(screen.getByRole("combobox"))
+    // The menu is portalled to <body>, outside every tagged page container. Without
+    // its own tag, App.tsx's hit-test would set mouse-ignore over the open menu and
+    // clicks/wheel would fall through the overlay window (menu unclickable and
+    // unscrollable while hover highlighting still works).
+    expect(screen.getByRole("listbox")).toHaveAttribute("data-overlay-interactive")
+  })
+
   it("shows a vision badge on vision-capable options and hides non-vision in a vision-only slot", async () => {
     const user = userEvent.setup()
     render(<Harness models={MODELS} visionOnly />)
