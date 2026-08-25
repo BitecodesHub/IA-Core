@@ -173,11 +173,29 @@ export class WindowHelper {
     this.mainWindow.setSkipTaskbar(winCfg.skipTaskbar)
     this.mainWindow.setAlwaysOnTop(winCfg.alwaysOnTop)
 
+    const loadAppUrl = () => {
+      if (!this.mainWindow || this.mainWindow.isDestroyed()) return
+      this.mainWindow.loadURL(startUrl).catch((err) => {
+        if (isDev) console.error("Failed to load URL:", err)
+      })
+    }
+
     // Surface renderer/preload load failures and a mounted-content check to the
     // main-process log — a blank window is almost always one of these, and the
     // root-content count catches a silently failed render (0 = blank).
     this.mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
-      if (isDev) console.error("[did-fail-load]", code, desc, url)
+      if (isDev && code === -102) {
+        console.warn(
+          `[WindowHelper] Dev server not reachable at ${url}. Retrying in 2s... (Tip: run "npm start" to launch dev server + Electron together)`
+        )
+        setTimeout(() => {
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            loadAppUrl()
+          }
+        }, 2000)
+      } else if (isDev) {
+        console.error("[did-fail-load]", code, desc, url)
+      }
     })
     this.mainWindow.webContents.on("did-finish-load", () => {
       if (!isDev) return
@@ -187,9 +205,7 @@ export class WindowHelper {
         .catch(() => {})
     })
 
-    this.mainWindow.loadURL(startUrl).catch((err) => {
-      console.error("Failed to load URL:", err)
-    })
+    loadAppUrl()
 
     // Show window after loading URL and center it
     this.mainWindow.once("ready-to-show", () => {
