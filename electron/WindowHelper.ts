@@ -6,7 +6,10 @@ import { SettingsService } from "./config/SettingsService"
 
 const isDev = process.env.NODE_ENV === "development"
 
-const startUrl = isDev ? "http://localhost:5180" : "app://bundle/index.html"
+// Dev uses the pinned IPv4 loopback (never "localhost"): Vite binds
+// 127.0.0.1:5180 (vite.config.ts) and Windows can resolve "localhost" to ::1,
+// which would refuse the connection even while the dev server is running.
+const startUrl = isDev ? "http://127.0.0.1:5180" : "app://bundle/index.html"
 
 export class WindowHelper {
   private mainWindow: BrowserWindow | null = null
@@ -129,8 +132,9 @@ export class WindowHelper {
     this.mainWindow.setContentProtection(winCfg.contentProtection)
     this.mainWindow.setOpacity(winCfg.opacity)
     // Block navigation away from the app origin and any new-window/popup
-    // requests. Pin to the known app origin (file:// in prod, localhost in dev)
-    // and deny everything else, including redirects and unparsable URLs.
+    // requests. Pin to the known app origin (app://bundle in prod, the pinned
+    // 127.0.0.1 dev server in dev) and deny everything else, including
+    // redirects and unparsable URLs.
     let allowedOrigin = ""
     try {
       allowedOrigin = new URL(startUrl).origin
@@ -202,7 +206,9 @@ export class WindowHelper {
       }
       if (isDev && code === -102) {
         console.warn(
-          `[WindowHelper] Dev server not reachable at ${url} and built bundle not found. Retrying in 2s...`
+          `[WindowHelper] Vite dev server not reachable at ${url} and no built bundle found. ` +
+            `"npm run electron:dev" starts Vite and Electron together; ` +
+            `if you launched Electron directly, run "npm run dev" in another terminal. Retrying in 2s...`
         )
         setTimeout(() => {
           if (this.mainWindow && !this.mainWindow.isDestroyed()) {

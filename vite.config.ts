@@ -18,6 +18,12 @@ export default defineConfig({
     },
   },
   server: {
+    // Bind the IPv4 loopback explicitly: on Windows, Node may resolve
+    // "localhost" to ::1 first, which desyncs Vite's bind address from the
+    // address Electron and wait-on connect to. Everything (this bind, the
+    // wait-on gate in electron:dev, and startUrl in WindowHelper) uses
+    // 127.0.0.1:5180 so they can never disagree.
+    host: "127.0.0.1",
     port: 5180,
     strictPort: true,
   },

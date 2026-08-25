@@ -95,6 +95,7 @@ and remote navigation/popups are blocked.
 | Script | Purpose |
 | --- | --- |
 | `npm start` | Dev (Vite + Electron) |
+| `npm run electron:dev` | Same as `npm start`: compiles main, starts Vite on 127.0.0.1:5180, waits, launches Electron |
 | `npm run build` | Typecheck + build renderer + compile main |
 | `npm run typecheck` | Type-check both the renderer and main process |
 | `npm test` | Unit tests (Vitest) |

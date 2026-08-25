@@ -6,12 +6,13 @@
     <!--
       Strict CSP: the renderer performs no network I/O of its own (all model
       traffic goes through the main process). data: is allowed for screenshot
-      previews; the localhost ws/http entries are only used by the Vite dev HMR
-      server and are inert under file:// in production.
+      previews; the 127.0.0.1 ws/http entries are only used by the Vite dev HMR
+      server (which binds 127.0.0.1:5180, see vite.config.ts) and are inert in
+      production.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws://localhost:5180 http://localhost:5180"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:5180 http://127.0.0.1:5180"
     />
     <title>Notes</title>
   </head>
