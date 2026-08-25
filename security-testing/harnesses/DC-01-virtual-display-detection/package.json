@@ -1,0 +1,19 @@
+{
+  "name": "bitecodes-proctor-validator",
+  "version": "1.0.0",
+  "description": "Bitecodes Proctor Validator — DC-01 detection-validation harness (virtual/indirect display detection). Defensive, in-lab tooling for hardening a proctoring product you own.",
+  "license": "UNLICENSED",
+  "private": true,
+  "bin": {
+    "bitecodes-detect-displays": "detect_displays.js",
+    "bitecodes-validate-dc01": "validate_dc01.js"
+  },
+  "scripts": {
+    "detect": "node detect_displays.js",
+    "baseline": "node validate_dc01.js baseline",
+    "check": "node validate_dc01.js check --test DC-01-T1"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

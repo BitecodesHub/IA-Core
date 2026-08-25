@@ -177,7 +177,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             <span className="text-xs sm:text-sm font-bold text-white">IA</span>
           </div>
           <span className="text-xs sm:text-sm font-semibold text-white whitespace-nowrap">
-            Ismail&apos;s AI
+          Bitecodes&apos;s AI
           </span>
         </div>
 

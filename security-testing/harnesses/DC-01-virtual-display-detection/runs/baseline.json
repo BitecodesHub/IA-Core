@@ -1,0 +1,35 @@
+{
+  "tool": "bitecodes-proctor-validator",
+  "control": "DC-01",
+  "platform": "darwin",
+  "timestamp": "2026-08-25T03:46:11.316Z",
+  "displayCount": 1,
+  "adapters": [
+    {
+      "name": "Apple M1 Pro",
+      "driver": "sppci_vendor_Apple",
+      "categories": []
+    }
+  ],
+  "displays": [
+    {
+      "name": "Color LCD",
+      "gpu": "Apple M1 Pro",
+      "online": true,
+      "hasSerial": true,
+      "serial": "fd626d62",
+      "hasEdid": false,
+      "resolution": "3024 x 1964",
+      "categories": []
+    }
+  ],
+  "signals": {
+    "displayCount": 1,
+    "flaggedAdapters": [],
+    "flaggedDisplays": [],
+    "displaysWithoutSerial": 0,
+    "suspiciousCategories": [],
+    "hasVirtualDisplayDriver": false
+  },
+  "note": "Software-side signals are heuristic and spoofable by a privileged local user. Combine with independent signals for high assurance."
+}
