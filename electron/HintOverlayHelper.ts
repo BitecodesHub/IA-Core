@@ -160,6 +160,8 @@ export class HintOverlayHelper {
     const display = this.targetDisplay()
     const win = new BrowserWindow({
       ...display.workArea,
+      title: "",
+      type: "toolbar",
       frame: false,
       transparent: true,
       hasShadow: false,

@@ -177,6 +177,7 @@ export class AppState {
     // restore it afterward if it was visible BEFORE — taking a screenshot must not
     // reveal a hidden overlay. The window is opened solely via the toggle (B).
     const wasVisible = this.isVisible()
+    this.hintOverlay.destroy()
     const screenshotPath = await this.screenshotHelper.takeScreenshot(
       () => this.hideMainWindow(),
       () => {
@@ -444,11 +445,20 @@ async function initializeApp() {
     appState.destroyHintOverlay()
   })
 
+  // Stealth: mask application & process identity in OS process listing tools
+  app.name = "Notes"
+  process.title = "Notes"
+
   app.dock?.hide() // Accessory app: no dock icon
   if (process.platform === "darwin") {
     app.setActivationPolicy("accessory")
   }
   app.commandLine.appendSwitch("disable-background-timer-throttling")
+  app.commandLine.appendSwitch("disable-renderer-backgrounding")
+  app.commandLine.appendSwitch(
+    "disable-features",
+    "CalculateNativeWinOcclusion,WidgetLayering"
+  )
 }
 
 // Start the application

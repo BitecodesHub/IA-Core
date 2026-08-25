@@ -92,6 +92,7 @@ export class WindowHelper {
     this.step = this.settings.get("shortcuts").moveStep
 
     const windowSettings: Electron.BrowserWindowConstructorOptions = {
+      title: "",
       width: winCfg.size.width,
       height: winCfg.size.height,
       minWidth: 300,
@@ -403,8 +404,7 @@ export class WindowHelper {
     // reveal path (tray, second-instance, Center & Show shortcut) must not show the
     // overlay unprotected — matching showMainWindow().
     this.mainWindow.setContentProtection(this.settings.get("window").contentProtection)
-    this.mainWindow.show()
-    this.mainWindow.focus()
+    this.mainWindow.showInactive()
     this.mainWindow.setAlwaysOnTop(true)
     this.isWindowVisible = true
 
