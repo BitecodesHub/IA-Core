@@ -102,6 +102,15 @@ and remote navigation/popups are blocked.
 | `npm run lint` / `npm run format` | ESLint / Prettier |
 | `npm run dist` | Package platform installers |
 
+### Windows installer
+
+`npm run dist` on a Windows machine produces the NSIS installer and a portable
+EXE in `release/`. Alternatively, the **Windows Installer** GitHub Actions
+workflow builds them on a clean runner: run it manually from the Actions tab
+(artifacts on the run page), or push a `v*` tag to publish a GitHub Release
+with the installer attached. Builds are unsigned, so SmartScreen shows a
+"More info → Run anyway" prompt on first launch.
+
 ## License
 
 ISC.
