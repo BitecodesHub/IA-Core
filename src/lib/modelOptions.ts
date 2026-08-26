@@ -4,6 +4,8 @@
 export interface ModelLike {
   name: string
   vision: boolean
+  /** Free-tier model (set during provider discovery, e.g. OpenRouter ":free"). */
+  free?: boolean
 }
 
 export type ComboKind = "auto" | "model" | "configured"
@@ -13,6 +15,7 @@ export interface ComboOption {
   value: string
   label: string
   vision?: boolean
+  free?: boolean
   kind: ComboKind
 }
 
@@ -26,11 +29,43 @@ export interface BuildOptions {
 }
 
 /**
+ * Known-strong free-tier model families, best first. Used only to order the
+ * "Free models" section — a name matching none of these simply sorts after the
+ * curated ones (alphabetically), so staleness degrades gracefully as providers
+ * rotate their free catalog.
+ */
+const FREE_FAMILY_RANK = [
+  "deepseek-r1",
+  "deepseek",
+  "llama-4",
+  "llama-3.3",
+  "qwen3",
+  "qwq",
+  "qwen",
+  "gemini-2",
+  "gemma-3",
+  "glm",
+  "kimi",
+  "mistral",
+  "hermes",
+  "phi",
+]
+
+/** Rank a free model by curated family quality; unknown families sort last. */
+export function rankFreeModel(name: string): number {
+  const n = name.toLowerCase()
+  const i = FREE_FAMILY_RANK.findIndex((family) => n.includes(family))
+  return i < 0 ? FREE_FAMILY_RANK.length : i
+}
+
+/**
  * Build the option list for a model slot: an Auto option first, then (if the
  * configured value is not present in the discovered list — e.g. a hand-entered
  * or vision-filtered slug) a pinned "(configured)" option preserving it, then the
- * discovered models. Preserving the configured value mirrors the old ModelsTab
- * "(configured)" affordance so a valid slug is never silently dropped.
+ * discovered models — free-tier models first (best-known families on top, see
+ * rankFreeModel), then the rest in discovery order. Preserving the configured
+ * value mirrors the old ModelsTab "(configured)" affordance so a valid slug is
+ * never silently dropped.
  */
 export function buildModelOptions(models: ModelLike[], opts: BuildOptions): ComboOption[] {
   const { value, visionOnly, autoLabel } = opts
@@ -47,8 +82,12 @@ export function buildModelOptions(models: ModelLike[], opts: BuildOptions): Comb
     })
   }
 
-  for (const m of list) {
-    options.push({ value: m.name, label: m.name, vision: m.vision, kind: "model" })
+  const free = list
+    .filter((m) => m.free)
+    .sort((a, b) => rankFreeModel(a.name) - rankFreeModel(b.name) || a.name.localeCompare(b.name))
+  const paid = list.filter((m) => !m.free)
+  for (const m of [...free, ...paid]) {
+    options.push({ value: m.name, label: m.name, vision: m.vision, free: m.free, kind: "model" })
   }
   return options
 }

@@ -156,6 +156,26 @@ const Combobox: React.FC<ComboboxProps> = ({
 
   const activeId = open && visible[active] ? `${baseId}-opt-${active}` : undefined
 
+  // Section headers ("Free models" / "All models") are a browse affordance: shown
+  // only for the unfiltered list, since a search re-ranks by match quality and
+  // would interleave the groups. Headers are presentation-only <li> rows rendered
+  // BEFORE the option at the boundary index, so option ids/indices (keyboard nav,
+  // scrollIntoView) are untouched. No free models → no headers (flat list).
+  const showSections = query.trim() === ""
+  const freeStartIdx = showSections
+    ? visible.findIndex((o) => o.kind === "model" && o.free)
+    : -1
+  const paidStartIdx =
+    freeStartIdx >= 0 ? visible.findIndex((o) => o.kind === "model" && !o.free) : -1
+  const sectionHeader = (label: string) => (
+    <li
+      role="presentation"
+      className="px-2 pt-1.5 pb-0.5 text-[9px] uppercase tracking-wider text-white/40 select-none"
+    >
+      {label}
+    </li>
+  )
+
   return (
     <div ref={wrapRef} className={`relative ${className ?? "w-48"}`}>
       <div
@@ -224,34 +244,47 @@ const Combobox: React.FC<ComboboxProps> = ({
             {visible.map((opt, i) => {
               const isSel = opt.value === value
               return (
-                <li
-                  id={`${baseId}-opt-${i}`}
-                  key={`${opt.kind}:${opt.value}`}
-                  role="option"
-                  aria-selected={isSel}
-                  className={`flex items-center gap-1.5 px-2 py-1 cursor-pointer ${
-                    i === active ? "bg-white text-black" : "text-white hover:bg-white/10"
-                  } ${opt.kind === "configured" ? "text-amber-300" : ""}`}
-                  // onMouseDown (not onClick) so it fires before the input blur.
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    commit(opt)
-                  }}
-                  onMouseEnter={() => setActive(i)}
-                >
-                  <span className="flex-1 truncate">{opt.label}</span>
-                  {opt.vision && (
-                    <span
-                      className={`text-[10px] px-1 rounded border ${
-                        i === active ? "border-black/40" : "border-white/30 text-white/70"
-                      }`}
-                      aria-label="vision-capable"
-                    >
-                      vision
-                    </span>
-                  )}
-                  {isSel && <Check className="w-3 h-3 shrink-0" aria-hidden />}
-                </li>
+                <React.Fragment key={`${opt.kind}:${opt.value}`}>
+                  {i === freeStartIdx && sectionHeader("Free models")}
+                  {i === paidStartIdx && sectionHeader("All models")}
+                  <li
+                    id={`${baseId}-opt-${i}`}
+                    role="option"
+                    aria-selected={isSel}
+                    className={`flex items-center gap-1.5 px-2 py-1 cursor-pointer ${
+                      i === active ? "bg-white text-black" : "text-white hover:bg-white/10"
+                    } ${opt.kind === "configured" ? "text-amber-300" : ""}`}
+                    // onMouseDown (not onClick) so it fires before the input blur.
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      commit(opt)
+                    }}
+                    onMouseEnter={() => setActive(i)}
+                  >
+                    <span className="flex-1 truncate">{opt.label}</span>
+                    {opt.free && (
+                      <span
+                        className={`text-[10px] px-1 rounded border ${
+                          i === active ? "border-black/40" : "border-emerald-400/50 text-emerald-300"
+                        }`}
+                        aria-label="free"
+                      >
+                        free
+                      </span>
+                    )}
+                    {opt.vision && (
+                      <span
+                        className={`text-[10px] px-1 rounded border ${
+                          i === active ? "border-black/40" : "border-white/30 text-white/70"
+                        }`}
+                        aria-label="vision-capable"
+                      >
+                        vision
+                      </span>
+                    )}
+                    {isSel && <Check className="w-3 h-3 shrink-0" aria-hidden />}
+                  </li>
+                </React.Fragment>
               )
             })}
             {hiddenCount > 0 && (

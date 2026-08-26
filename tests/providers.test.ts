@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
-import { OpenAICompatibleProvider, OllamaProvider } from "../electron/llm/providers"
+import { OpenAICompatibleProvider, OllamaProvider, isFreeModelEntry } from "../electron/llm/providers"
 import type { AiProviderSettings } from "../electron/config/schema"
 
 const ollamaConfig: AiProviderSettings = {
@@ -429,5 +429,26 @@ describe("OllamaProvider.refreshCapability — offline vision detection", () => 
     const p = new OllamaProvider(ollamaConfig)
     expect(await p.refreshCapability("llava")).toBe(true)
     expect(await p.refreshCapability("mistral")).toBe(false)
+  })
+})
+
+describe("isFreeModelEntry", () => {
+  it("detects the OpenRouter ':free' id suffix", () => {
+    expect(isFreeModelEntry("meta-llama/llama-3.3-70b-instruct:free", {})).toBe(true)
+  })
+
+  it("detects zero prompt+completion pricing", () => {
+    expect(isFreeModelEntry("some/model", { pricing: { prompt: "0", completion: "0" } })).toBe(true)
+  })
+
+  it("rejects paid, partial-zero, and sentinel '-1' pricing", () => {
+    expect(isFreeModelEntry("some/model", { pricing: { prompt: "0.000001", completion: "0" } })).toBe(false)
+    expect(isFreeModelEntry("some/model", { pricing: { prompt: "0" } })).toBe(false)
+    expect(isFreeModelEntry("openrouter/auto", { pricing: { prompt: "-1", completion: "-1" } })).toBe(false)
+  })
+
+  it("stays false for catalogs without pricing metadata (vanilla OpenAI, LM Studio)", () => {
+    expect(isFreeModelEntry("gpt-4o", {})).toBe(false)
+    expect(isFreeModelEntry("gpt-4o", { pricing: null })).toBe(false)
   })
 })

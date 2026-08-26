@@ -91,6 +91,50 @@ describe("Combobox", () => {
     expect(screen.getByRole("option", { name: /x\/custom-model \(configured\)/ })).toBeInTheDocument()
   })
 
+  it("groups free models under a 'Free models' header at the top, before 'All models'", async () => {
+    const user = userEvent.setup()
+    const models: ModelLike[] = [
+      { name: "openai/gpt-4o", vision: true },
+      { name: "deepseek/deepseek-r1:free", vision: false, free: true },
+    ]
+    render(<Harness models={models} />)
+    await user.click(screen.getByRole("combobox"))
+    const list = screen.getByRole("listbox")
+    expect(within(list).getByText("Free models")).toBeInTheDocument()
+    expect(within(list).getByText("All models")).toBeInTheDocument()
+    const rows = within(list).getAllByRole("option")
+    // Auto first, then the free model, then the paid one.
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "Auto",
+      "deepseek/deepseek-r1:freefree",
+      "openai/gpt-4ovision",
+    ])
+    expect(within(list).getByLabelText("free")).toBeInTheDocument()
+  })
+
+  it("hides section headers while searching (results are rank-ordered, not grouped)", async () => {
+    const user = userEvent.setup()
+    const models: ModelLike[] = [
+      { name: "openai/gpt-4o", vision: true },
+      { name: "deepseek/deepseek-r1:free", vision: false, free: true },
+    ]
+    render(<Harness models={models} />)
+    await user.click(screen.getByRole("combobox"))
+    await user.keyboard("deep")
+    const list = screen.getByRole("listbox")
+    expect(within(list).queryByText("Free models")).not.toBeInTheDocument()
+    expect(within(list).getByRole("option", { name: /deepseek-r1/ })).toBeInTheDocument()
+  })
+
+  it("shows no headers when the provider reports no free models", async () => {
+    const user = userEvent.setup()
+    render(<Harness models={MODELS} />)
+    await user.click(screen.getByRole("combobox"))
+    const list = screen.getByRole("listbox")
+    expect(within(list).queryByText("Free models")).not.toBeInTheDocument()
+    expect(within(list).queryByText("All models")).not.toBeInTheDocument()
+  })
+
   it("tags the portalled listbox as overlay-interactive so the click-through window keeps mouse capture over it", async () => {
     const user = userEvent.setup()
     render(<Harness models={MODELS} />)

@@ -5,10 +5,12 @@ import {
   capOptions,
   autoHintForSlot,
   matchesSetting,
+  rankFreeModel,
   type ModelLike,
 } from "../src/lib/modelOptions"
 
 const M = (name: string, vision = false): ModelLike => ({ name, vision })
+const F = (name: string, vision = false): ModelLike => ({ name, vision, free: true })
 
 describe("buildModelOptions", () => {
   it("always puts Auto first with an empty value", () => {
@@ -40,6 +42,45 @@ describe("buildModelOptions", () => {
     // "t" is non-vision so filtered out of the list, but preserved as configured.
     expect(opts.map((o) => o.value)).toEqual(["", "t", "v"])
     expect(opts.find((o) => o.value === "t")?.kind).toBe("configured")
+  })
+
+  it("floats free models above paid ones, keeping the free flag on the options", () => {
+    const opts = buildModelOptions(
+      [M("openai/gpt-4o"), F("meta/llama-3.3-70b:free"), M("anthropic/claude"), F("z/other:free")],
+      { value: "" }
+    )
+    const models = opts.filter((o) => o.kind === "model")
+    expect(models.map((o) => o.value)).toEqual([
+      "meta/llama-3.3-70b:free", // curated family (llama-3.3) ranks above unknown
+      "z/other:free",
+      "openai/gpt-4o", // paid models keep discovery order after the free group
+      "anthropic/claude",
+    ])
+    expect(models[0].free).toBe(true)
+    expect(models[2].free).toBeFalsy()
+  })
+
+  it("orders the free group by curated family rank, then alphabetically", () => {
+    const opts = buildModelOptions(
+      [F("z/unknown-b:free"), F("a/unknown-a:free"), F("deepseek/deepseek-r1:free")],
+      { value: "" }
+    )
+    expect(opts.filter((o) => o.kind === "model").map((o) => o.value)).toEqual([
+      "deepseek/deepseek-r1:free",
+      "a/unknown-a:free",
+      "z/unknown-b:free",
+    ])
+  })
+})
+
+describe("rankFreeModel", () => {
+  it("ranks known-strong families above unknown names", () => {
+    expect(rankFreeModel("deepseek/deepseek-r1:free")).toBeLessThan(
+      rankFreeModel("someorg/wildcard-9b:free")
+    )
+    expect(rankFreeModel("meta-llama/llama-3.3-70b-instruct:free")).toBeLessThan(
+      rankFreeModel("someorg/wildcard-9b:free")
+    )
   })
 })
 

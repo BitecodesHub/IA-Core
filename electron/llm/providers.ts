@@ -32,7 +32,22 @@ export interface ModelInfo {
   providerId: string
   name: string
   vision: boolean
+  /** Free-tier model (OpenRouter ":free" suffix or zero pricing). Absent for local providers. */
+  free?: boolean
   capabilities: AiCapability[]
+}
+
+/**
+ * OpenRouter tags its free tier with a ":free" id suffix and zero prompt AND
+ * completion pricing (its "openrouter/auto" router uses "-1" pricing, which
+ * must not count). Other OpenAI-compatible catalogs carry no pricing metadata,
+ * so this stays false there unless they adopt the same suffix convention.
+ */
+export function isFreeModelEntry(name: string, entry: unknown): boolean {
+  if (name.endsWith(":free")) return true
+  const pricing = (entry as any)?.pricing
+  if (!pricing || typeof pricing !== "object") return false
+  return Number(pricing.prompt) === 0 && Number(pricing.completion) === 0
 }
 
 /**
@@ -376,7 +391,13 @@ export class OpenAICompatibleProvider implements LlmProvider {
         // endpoint returns no modality info (vanilla OpenAI, LM Studio, …).
         const vision =
           visionFromModality(entry) ?? (heuristicVision(name) || name === this.config.visionModel)
-        return { providerId: this.config.id, name, vision, capabilities: capabilitiesFor(vision) }
+        return {
+          providerId: this.config.id,
+          name,
+          vision,
+          free: isFreeModelEntry(name, entry),
+          capabilities: capabilitiesFor(vision),
+        }
       })
       .filter((m) => m.name)
   }
