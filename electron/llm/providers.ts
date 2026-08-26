@@ -47,7 +47,9 @@ export function isFreeModelEntry(name: string, entry: unknown): boolean {
   if (name.endsWith(":free")) return true
   const pricing = (entry as any)?.pricing
   if (!pricing || typeof pricing !== "object") return false
-  return Number(pricing.prompt) === 0 && Number(pricing.completion) === 0
+  // parseFloat (never Number): null/""/[] must read as unknown (NaN), not 0 — a
+  // paid model whose catalog reports "price unknown" must never be labeled free.
+  return parseFloat(pricing.prompt) === 0 && parseFloat(pricing.completion) === 0
 }
 
 /**

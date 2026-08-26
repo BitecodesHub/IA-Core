@@ -9,10 +9,12 @@ function Harness({
   initial = "",
   models,
   visionOnly,
+  maxVisible,
 }: {
   initial?: string
   models: ModelLike[]
   visionOnly?: boolean
+  maxVisible?: number
 }) {
   const [v, setV] = useState(initial)
   return (
@@ -21,6 +23,7 @@ function Harness({
         ariaLabel="Model"
         value={v}
         onChange={setV}
+        maxVisible={maxVisible}
         options={buildModelOptions(models, { value: v, visionOnly })}
       />
       <div data-testid="val">{v === "" ? "AUTO" : v}</div>
@@ -133,6 +136,42 @@ describe("Combobox", () => {
     const list = screen.getByRole("listbox")
     expect(within(list).queryByText("Free models")).not.toBeInTheDocument()
     expect(within(list).queryByText("All models")).not.toBeInTheDocument()
+  })
+
+  it("keeps focus and keyboard nav alive after clicking a section header", async () => {
+    const user = userEvent.setup()
+    const models: ModelLike[] = [
+      { name: "openai/gpt-4o", vision: true },
+      { name: "deepseek/deepseek-r1:free", vision: false, free: true },
+    ]
+    render(<Harness models={models} />)
+    const input = screen.getByRole("combobox")
+    await user.click(input)
+    // A header click must not blur the input (mousedown default prevented, like
+    // option rows) — otherwise the still-open menu goes keyboard-dead.
+    await user.click(within(screen.getByRole("listbox")).getByText("Free models"))
+    expect(input).toHaveFocus()
+    expect(screen.getByRole("listbox")).toBeInTheDocument()
+    await user.keyboard("{ArrowDown}{Enter}")
+    expect(screen.getByTestId("val")).toHaveTextContent("deepseek/deepseek-r1:free")
+  })
+
+  it("falls back to Auto on open when the selected model is beyond the rendered cap", async () => {
+    const user = userEvent.setup()
+    const models: ModelLike[] = [
+      { name: "m1", vision: false },
+      { name: "m2", vision: false },
+      { name: "m3", vision: false },
+    ]
+    // Options: Auto, m1, m2, m3 — cap of 3 renders Auto..m2, so selected m3 is
+    // not visible. The highlight must land on Auto (index 0), not park on the
+    // last visible row where Enter would commit the wrong model (m2).
+    render(<Harness initial="m3" models={models} maxVisible={3} />)
+    const input = screen.getByRole("combobox")
+    await user.click(input)
+    expect(input.getAttribute("aria-activedescendant")).toMatch(/-opt-0$/)
+    await user.keyboard("{Enter}")
+    expect(screen.getByTestId("val")).toHaveTextContent("AUTO")
   })
 
   it("tags the portalled listbox as overlay-interactive so the click-through window keeps mouse capture over it", async () => {

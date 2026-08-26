@@ -451,4 +451,12 @@ describe("isFreeModelEntry", () => {
     expect(isFreeModelEntry("gpt-4o", {})).toBe(false)
     expect(isFreeModelEntry("gpt-4o", { pricing: null })).toBe(false)
   })
+
+  it("treats null/empty pricing values as unknown, never free", () => {
+    expect(isFreeModelEntry("some/model", { pricing: { prompt: null, completion: null } })).toBe(false)
+    expect(isFreeModelEntry("some/model", { pricing: { prompt: "", completion: "" } })).toBe(false)
+    expect(isFreeModelEntry("some/model", { pricing: { prompt: null, completion: "0" } })).toBe(false)
+    // Numeric zero (not just OpenRouter's string "0") still counts as free.
+    expect(isFreeModelEntry("some/model", { pricing: { prompt: 0, completion: 0 } })).toBe(true)
+  })
 })

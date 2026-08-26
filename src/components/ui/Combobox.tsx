@@ -117,8 +117,12 @@ const Combobox: React.FC<ComboboxProps> = ({
   const openMenu = () => {
     if (disabled) return
     setQuery("")
-    const idx = Math.max(0, options.findIndex((o) => o.value === value))
-    setActive(idx)
+    // Clamp to the rendered (capped) slice: a selected option past maxVisible is
+    // not rendered while browsing, and letting the range-clamp effect park the
+    // highlight on the last visible row would commit the wrong model on Enter.
+    // Fall back to index 0 (Auto), matching the value-not-in-list case.
+    const idx = options.findIndex((o) => o.value === value)
+    setActive(idx >= 0 && idx < maxVisible ? idx : 0)
     setOpen(true)
   }
   const close = () => {
@@ -167,9 +171,15 @@ const Combobox: React.FC<ComboboxProps> = ({
     : -1
   const paidStartIdx =
     freeStartIdx >= 0 ? visible.findIndex((o) => o.kind === "model" && !o.free) : -1
+  // Non-option rows must prevent the mousedown default like option rows do:
+  // otherwise clicking one blurs the input while the menu stays open (it is
+  // inside menuRef, so the outside-click closer exempts it), leaving arrows,
+  // Enter, Escape, and typing dead until the input is clicked again.
+  const keepFocus = (e: React.MouseEvent) => e.preventDefault()
   const sectionHeader = (label: string) => (
     <li
       role="presentation"
+      onMouseDown={keepFocus}
       className="px-2 pt-1.5 pb-0.5 text-[9px] uppercase tracking-wider text-white/40 select-none"
     >
       {label}
@@ -237,7 +247,7 @@ const Combobox: React.FC<ComboboxProps> = ({
             className="z-50 overflow-y-auto bg-black border border-white/30 rounded shadow-lg text-xs"
           >
             {visible.length === 0 && (
-              <li className="px-2 py-1 text-white/60" role="presentation">
+              <li className="px-2 py-1 text-white/60" role="presentation" onMouseDown={keepFocus}>
                 {emptyText}
               </li>
             )}
@@ -288,7 +298,7 @@ const Combobox: React.FC<ComboboxProps> = ({
               )
             })}
             {hiddenCount > 0 && (
-              <li className="px-2 py-1 text-white/60" role="presentation">
+              <li className="px-2 py-1 text-white/60" role="presentation" onMouseDown={keepFocus}>
                 +{hiddenCount} more — keep typing to narrow
               </li>
             )}
