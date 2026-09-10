@@ -1,3 +1,30 @@
+# Normalise line endings so a Windows checkout (Git for Windows defaults to
+# core.autocrlf=true) does not rewrite every source file to CRLF and make the
+# whole tree look modified against Prettier's LF setting.
+* text=auto eol=lf
+
+# Windows-native files that must keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets — never touch.
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.dmg binary
+*.exe binary
+*.dll binary
+*.node binary
+*.zip binary
+*.bin binary
+
 release/Interview[[:space:]]Coder-1.0.0-arm64-mac.zip filter=lfs diff=lfs merge=lfs -text
 release/Interview[[:space:]]Coder-1.0.0-arm64.dmg filter=lfs diff=lfs merge=lfs -text
 release/mac-arm64/Interview[[:space:]]Coder.app/Contents/Frameworks/Electron[[:space:]]Framework.framework/Versions/A/Electron[[:space:]]Framework filter=lfs diff=lfs merge=lfs -text

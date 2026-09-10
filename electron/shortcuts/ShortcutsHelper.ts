@@ -332,6 +332,7 @@ export class ShortcutsHelper {
           win.webContents.send("screenshot-error", {
             message: err?.message ?? String(err),
             code: err?.code,
+            actionable: err?.actionable === true,
           })
         }
       },

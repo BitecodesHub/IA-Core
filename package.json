@@ -1,6 +1,6 @@
 {
   "name": "interview-coder",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "main": "./dist-electron/main.js",
   "scripts": {
     "clean": "rimraf dist dist-electron",
@@ -30,7 +30,28 @@
       "dist/**/*",
       "dist-electron/**/*",
       "package.json",
-      "node_modules/**/*"
+      "!node_modules/react-icons/**",
+      "!node_modules/lucide-react/**",
+      "!node_modules/@radix-ui/**",
+      "!node_modules/react-syntax-highlighter/**",
+      "!node_modules/react-code-blocks/**",
+      "!node_modules/react-query/**",
+      "!node_modules/@emotion/**",
+      "!node_modules/@babel/**",
+      "!node_modules/refractor/**",
+      "!node_modules/highlight.js/**",
+      "!node_modules/lowlight/**",
+      "!node_modules/prismjs/**",
+      "!node_modules/@xenova/**",
+      "!node_modules/onnxruntime-web/**",
+      "!node_modules/onnxruntime-common/**",
+      "!node_modules/protobufjs/**",
+      "!node_modules/@protobufjs/**",
+      "!node_modules/onnx-proto/**",
+      "!node_modules/@huggingface/**",
+      "!**/node_modules/**/*.{md,markdown,map,ts,tsx,flow,tsbuildinfo}",
+      "!**/node_modules/**/{test,tests,__tests__,example,examples,doc,docs,demo,.github,.idea}/**",
+      "!**/node_modules/**/{LICENSE,license,LICENCE,AUTHORS,CHANGELOG,CONTRIBUTING}*"
     ],
     "directories": {
       "output": "release",
@@ -58,7 +79,13 @@
       "entitlements": "assets/entitlements.mac.plist",
       "extendInfo": {
         "LSUIElement": true
-      }
+      },
+      "files": [
+        "!node_modules/@img/sharp-win32-*/**",
+        "!node_modules/@img/sharp-linux*/**",
+        "!node_modules/@img/sharp-libvips-linux*/**",
+        "!node_modules/@img/sharp-wasm32/**"
+      ]
     },
     "win": {
       "target": [
@@ -76,7 +103,15 @@
         }
       ],
       "icon": "assets/icons/win/icon.ico",
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "asInvoker",
+      "files": [
+        "!node_modules/@img/sharp-darwin-*/**",
+        "!node_modules/@img/sharp-libvips-darwin-*/**",
+        "!node_modules/@img/sharp-linux*/**",
+        "!node_modules/@img/sharp-libvips-linux*/**",
+        "!node_modules/@img/sharp-wasm32/**"
+      ],
+      "verifyUpdateCodeSignature": false
     },
     "linux": {
       "target": [
@@ -94,13 +129,25 @@
         }
       ],
       "icon": "assets/icons/png/",
-      "category": "Office"
+      "category": "Office",
+      "files": [
+        "!node_modules/@img/sharp-win32-*/**",
+        "!node_modules/@img/sharp-darwin-*/**",
+        "!node_modules/@img/sharp-libvips-darwin-*/**",
+        "!node_modules/@img/sharp-wasm32/**"
+      ]
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Notes",
+      "allowElevation": false,
+      "runAfterFinish": true,
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
     },
     "publish": [
       {
@@ -108,7 +155,17 @@
         "owner": "BitecodesHub",
         "repo": "IA-Core"
       }
-    ]
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/sharp/**",
+      "**/node_modules/@img/**",
+      "**/node_modules/screenshot-desktop/**"
+    ],
+    "npmRebuild": false,
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
+    }
   },
   "keywords": [],
   "author": "",

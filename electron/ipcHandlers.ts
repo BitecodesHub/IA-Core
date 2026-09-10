@@ -1,6 +1,6 @@
 // ipcHandlers.ts
 
-import { ipcMain, app, shell, systemPreferences, clipboard } from "electron"
+import { ipcMain, app, clipboard } from "electron"
 import path from "node:path"
 import os from "node:os"
 import fs from "node:fs"
@@ -9,10 +9,30 @@ import { SettingsService, DeepPartial } from "./config/SettingsService"
 import { SecretStore } from "./config/SecretStore"
 import type { AppSettings } from "./config/schema"
 import type { ShortcutActionId, Binding } from "./config/schema"
+import { openPrivacySettings } from "./permissions"
 
 // Stealth: screenshot paths embed the OS username (via userData) and activity
 // timing is a forensic signal. Keep such logs out of production stdout/stderr.
 const isDev = process.env.NODE_ENV === "development"
+
+/**
+ * Normalise a resolved path for containment comparison.
+ *
+ * Windows paths are case-insensitive, so a plain case-sensitive `startsWith`
+ * rejects legitimate paths whose drive letter or directory casing differs from
+ * `app.getPath("userData")` (e.g. "C:\\Users\\..." vs "c:\\users\\..."). Casing is
+ * folded on win32 only — POSIX filesystems are genuinely case-sensitive and
+ * folding there would loosen the check.
+ */
+function comparablePath(p: string): string {
+  const resolved = path.resolve(p) + path.sep
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved
+}
+
+function isWithin(candidate: string, roots: string[]): boolean {
+  const target = comparablePath(candidate)
+  return roots.some((root) => target.startsWith(comparablePath(root)))
+}
 
 /**
  * Resolve and confirm a renderer-supplied path lives inside one of the app's
@@ -20,17 +40,15 @@ const isDev = process.env.NODE_ENV === "development"
  * through the screenshot/image IPC channels.
  */
 function assertWithinScreenshotDirs(p: string): string {
-  const resolved = path.resolve(p)
   const userData = app.getPath("userData")
   const allowedRoots = [
     path.join(userData, "screenshots"),
     path.join(userData, "extra_screenshots"),
-  ].map((r) => path.resolve(r) + path.sep)
-  const ok = allowedRoots.some((root) => (resolved + path.sep).startsWith(root))
-  if (!ok) {
+  ]
+  if (!isWithin(p, allowedRoots)) {
     throw new Error("Access denied: path is outside the allowed directories")
   }
-  return resolved
+  return path.resolve(p)
 }
 
 /**
@@ -39,15 +57,11 @@ function assertWithinScreenshotDirs(p: string): string {
  * the analyze-audio-file channel.
  */
 function assertWithinAudioDirs(p: string): string {
-  const resolved = path.resolve(p)
-  const allowedRoots = [path.join(os.tmpdir(), "ia-core-audio"), app.getPath("userData")].map(
-    (r) => path.resolve(r) + path.sep
-  )
-  const ok = allowedRoots.some((root) => (resolved + path.sep).startsWith(root))
-  if (!ok) {
+  const allowedRoots = [path.join(os.tmpdir(), "ia-core-audio"), app.getPath("userData")]
+  if (!isWithin(p, allowedRoots)) {
     throw new Error("Access denied: audio path is outside the allowed directories")
   }
-  return resolved
+  return path.resolve(p)
 }
 
 export function initializeIpcHandlers(appState: AppState): void {
@@ -95,29 +109,43 @@ export function initializeIpcHandlers(appState: AppState): void {
       win?.webContents.send("screenshot-error", {
         message: error?.message ?? String(error),
         code: error?.code,
+        // Whether an OS privacy pane exists for this failure. False on Windows,
+        // which has no screen-capture permission at all.
+        actionable: error?.actionable === true,
       })
       throw error
     }
   })
 
-  // Screen Recording permission status + helper to open the right settings pane.
+  // Screen-capture + microphone availability.
+  //
+  // On macOS this reflects the real TCC permission. On Windows there is NO
+  // screen-capture permission, so "granted" would be a guess: instead the
+  // startup check probes the capture pipeline, and this returns that result.
   ipcMain.handle("get-screen-permission", async () => {
-    if (process.platform !== "darwin") return "granted"
-    try {
-      return systemPreferences.getMediaAccessStatus("screen")
-    } catch {
-      return "unknown"
-    }
+    const cached = appState.getPermissionReport()
+    if (cached) return cached.screenCapture
+    const report = await appState.refreshPermissions()
+    return report.screenCapture
   })
 
-  ipcMain.handle("open-screen-recording-settings", async () => {
-    if (process.platform === "darwin") {
-      await shell.openExternal(
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-      )
-    }
-    return { ok: true }
+  /** Full report (both capabilities + whether a settings pane exists). */
+  ipcMain.handle("get-permissions", async () => {
+    return appState.getPermissionReport() ?? appState.refreshPermissions()
   })
+
+  ipcMain.handle("refresh-permissions", async () => appState.refreshPermissions())
+
+  // Deep-link to the OS privacy pane, where one exists. Returns ok:false on
+  // Windows for "screen" because Windows has no such setting — the renderer
+  // must not claim otherwise.
+  ipcMain.handle("open-privacy-settings", async (_event, kind: unknown) => {
+    const target = kind === "microphone" ? "microphone" : "screen"
+    return openPrivacySettings(target)
+  })
+
+  // Retained channel name for the existing renderer call site.
+  ipcMain.handle("open-screen-recording-settings", async () => openPrivacySettings("screen"))
 
   // Silent clipboard write — used to auto-copy generated code from a completed
   // response. No UI, no focus change; runs entirely in the main process.

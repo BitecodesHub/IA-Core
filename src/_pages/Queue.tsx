@@ -219,15 +219,21 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       window.electronAPI.onProcessingNoScreenshots(() => {
         // Nothing to process — stay silent (no pop).
       }),
-      window.electronAPI.onScreenshotError(({ message, code }) => {
-        // Stealth: no toast. Note it inline; only the (rare) permission case needs
-        // the user-actionable Settings deep-link.
+      window.electronAPI.onScreenshotError(({ message, code, actionable }) => {
+        // Stealth: no toast. Note it inline; only open a settings pane when the
+        // OS actually has one for this failure. Windows has NO screen-capture
+        // privacy setting, so `actionable` is false there and we must not send
+        // the user hunting for a permission that does not exist.
         setChatMessages((prev) => [
           ...prev,
-          { role: "assistant" as const, text: (message || "Screenshot failed.").slice(0, 200), id: Date.now() },
+          {
+            role: "assistant" as const,
+            text: (message || "Screenshot failed.").slice(0, 300),
+            id: Date.now(),
+          },
         ])
-        if (code === "SCREEN_PERMISSION") {
-          window.electronAPI.openScreenRecordingSettings()
+        if (code === "SCREEN_PERMISSION" && actionable) {
+          window.electronAPI.openPrivacySettings("screen")
         }
       }),
     ]

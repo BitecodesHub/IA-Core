@@ -5,7 +5,7 @@ import { LLMHelper } from "./LLMHelper"
 import { AudioService } from "./audio/AudioService"
 import { SettingsService } from "./config/SettingsService"
 import { isTransientError } from "./llm/retry"
-import sharp from "sharp"
+import { toResizedJpeg } from "./image/resize"
 
 // Stealth: screenshot file paths embed the OS username (via userData). Keep them
 // out of production logs.
@@ -295,10 +295,7 @@ export class ProcessingHelper {
       // Resize the screenshot before encoding — raw Retina PNGs can be 4-8 MB.
       // Downsampling to 1280 px wide JPEG (q85) reduces payload to ~150-350 KB,
       // which speeds up vision-model inference significantly without losing text legibility.
-      const resized = await sharp(imagePath)
-        .resize({ width: 1536, withoutEnlargement: true })
-        .jpeg({ quality: 92 })
-        .toBuffer()
+      const resized = await toResizedJpeg(imagePath, { maxWidth: 1536, quality: 92 })
       const base64Image = resized.toString("base64")
 
       if (isDev)

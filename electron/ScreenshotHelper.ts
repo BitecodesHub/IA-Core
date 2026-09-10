@@ -4,20 +4,14 @@ import path from "node:path"
 import fs from "node:fs"
 import { app } from "electron"
 import { v4 as uuidv4 } from "uuid"
-import screenshot from "screenshot-desktop"
 
-import os from "node:os"
+import { classifyCaptureError } from "./screenshot/errors"
+import { backendOrder, hideSettleMs, type BackendName } from "./screenshot/policy"
+import { probeCaptureSupport, runBackend } from "./screenshot/backends"
 
 // Stealth: temp screenshot paths embed a UUID and reveal capture activity — keep
 // them out of production logs.
 const isDev = process.env.NODE_ENV === "development"
-
-/** Heuristic for macOS Screen Recording permission failures from `screencapture`. */
-function isScreenPermissionError(message: string): boolean {
-  return /could not create image|not authorized|screen recording|screencapture|operation not permitted|denied/i.test(
-    message
-  )
-}
 
 export class ScreenshotHelper {
   private screenshotQueue: string[] = []
@@ -30,6 +24,11 @@ export class ScreenshotHelper {
   private view: "queue" | "solutions" = "queue"
   /** Serializes captures so rapid triggers (e.g. mashing the shortcut) cannot race. */
   private captureChain: Promise<void> = Promise.resolve()
+  /**
+   * Backend that last succeeded. Sticky so we do not re-pay a failing backend's
+   * timeout on every subsequent capture once a working one is known.
+   */
+  private preferredBackend: BackendName | null = null
 
   constructor(view: "queue" | "solutions" = "queue") {
     this.view = view
@@ -76,12 +75,50 @@ export class ScreenshotHelper {
     )
   }
 
+  /**
+   * Try each backend for this platform in order, remembering the one that
+   * worked. Reports the FIRST backend's error if every backend fails, since
+   * that is the platform's intended path and its message is the most relevant.
+   */
+  private async capturePng(): Promise<Buffer> {
+    const order = backendOrder(process.platform)
+    const candidates = this.preferredBackend
+      ? [this.preferredBackend, ...order.filter((b) => b !== this.preferredBackend)]
+      : order
+
+    let firstError: unknown = null
+    for (const backend of candidates) {
+      try {
+        const png = await runBackend(backend)
+        this.preferredBackend = backend
+        return png
+      } catch (err) {
+        if (firstError === null) firstError = err
+        if (isDev) console.error(`[ScreenshotHelper] backend "${backend}" failed:`, err)
+        // A backend that just failed must not stay sticky.
+        if (this.preferredBackend === backend) this.preferredBackend = null
+      }
+    }
+    throw firstError ?? new Error("No screen-capture backend available")
+  }
+
+  /**
+   * Confirm a capture pipeline exists, without grabbing (or storing) a real
+   * frame. Used for the startup warm-up so a broken capture stack is known
+   * before the user first presses the shortcut.
+   */
+  public async probe(): Promise<{ ok: boolean; backend?: BackendName; error?: string }> {
+    const result = await probeCaptureSupport()
+    if (result.ok && result.backend) this.preferredBackend = result.backend
+    return result
+  }
+
   public async takeScreenshot(
     hideMainWindow: () => void,
     showMainWindow: () => void
   ): Promise<string> {
     // Serialize captures: each call waits for the previous one to finish so
-    // concurrent triggers cannot race the temp file or the queue.
+    // concurrent triggers cannot race the queue.
     const previous = this.captureChain
     let release: () => void = () => {}
     this.captureChain = new Promise<void>((resolve) => {
@@ -102,94 +139,37 @@ export class ScreenshotHelper {
     try {
       hideMainWindow()
 
-      // Add a small delay to ensure window is hidden
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      // Let the compositor settle so the overlay is really gone from the frame.
+      await new Promise((resolve) => setTimeout(resolve, hideSettleMs(process.platform)))
 
-      // Use a temporary file path to avoid issues with spaces in directory names
-      // screenshot-desktop may fail with spaces in paths on some systems
-      const tempPath = path.join(os.tmpdir(), `${uuidv4()}.png`)
-      if (isDev) console.log(`Taking screenshot to temp path: ${tempPath}`)
+      const png = await this.capturePng()
 
-      try {
-        await screenshot({ filename: tempPath })
-      } catch (err) {
-        console.error("screenshot-desktop failed:", err)
-        throw err
-      }
+      // Write straight to the destination. The previous implementation captured
+      // to os.tmpdir() and renamed, which added an EXDEV/EPERM cross-volume
+      // dance and an existsSync poll loop; capturing to a Buffer removes both.
+      const targetDir = this.view === "queue" ? this.screenshotDir : this.extraScreenshotDir
+      const finalPath = path.join(targetDir, `${uuidv4()}.png`)
+      await fs.promises.mkdir(targetDir, { recursive: true })
+      await fs.promises.writeFile(finalPath, png)
 
-      // Verify temp file creation with retries
-      let retries = 20
-      while (retries > 0 && !fs.existsSync(tempPath)) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        retries--
-      }
-
-      if (!fs.existsSync(tempPath)) {
-        throw new Error(`Failed to verify screenshot at temp path: ${tempPath}`)
-      }
-
-      // Determine final destination
-      let finalPath = ""
-      if (this.view === "queue") {
-        finalPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
-      } else {
-        finalPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
-      }
-
-      try {
-        await fs.promises.rename(tempPath, finalPath)
-      } catch (renameErr: any) {
-        if (["EXDEV", "EPERM", "EBUSY"].includes(renameErr?.code)) {
-          await fs.promises.copyFile(tempPath, finalPath)
-          await fs.promises.unlink(tempPath).catch(() => {})
-        } else {
-          await fs.promises.unlink(tempPath).catch(() => {})
-          throw renameErr
-        }
-      }
-
-      if (this.view === "queue") {
-        this.screenshotQueue.push(finalPath)
-        if (this.screenshotQueue.length > this.MAX_SCREENSHOTS) {
-          const removedPath = this.screenshotQueue.shift()
-          if (removedPath) {
-            try {
-              if (fs.existsSync(removedPath)) {
-                await fs.promises.unlink(removedPath)
-              }
-            } catch (error) {
-              console.error("Error removing old screenshot:", error)
-            }
-          }
-        }
-      } else {
-        this.extraScreenshotQueue.push(finalPath)
-        if (this.extraScreenshotQueue.length > this.MAX_SCREENSHOTS) {
-          const removedPath = this.extraScreenshotQueue.shift()
-          if (removedPath) {
-            try {
-              if (fs.existsSync(removedPath)) {
-                await fs.promises.unlink(removedPath)
-              }
-            } catch (error) {
-              console.error("Error removing old screenshot:", error)
-            }
-          }
-        }
+      const queue = this.view === "queue" ? this.screenshotQueue : this.extraScreenshotQueue
+      queue.push(finalPath)
+      while (queue.length > this.MAX_SCREENSHOTS) {
+        const removedPath = queue.shift()
+        if (!removedPath) continue
+        await fs.promises.unlink(removedPath).catch((error: any) => {
+          if (error?.code !== "ENOENT") console.error("Error removing old screenshot:", error)
+        })
       }
 
       return finalPath
     } catch (error: any) {
       console.error("Error taking screenshot:", error)
-      const msg = String(error?.message ?? error)
-      if (isScreenPermissionError(msg)) {
-        const err: any = new Error(
-          "Screen Recording permission is required. Open System Settings → Privacy & Security → Screen Recording, enable this app, then relaunch."
-        )
-        err.code = "SCREEN_PERMISSION"
-        throw err
-      }
-      throw new Error(`Failed to take screenshot: ${msg}`)
+      const failure = classifyCaptureError(String(error?.message ?? error), process.platform)
+      const err: any = new Error(failure.message)
+      err.code = failure.code
+      err.actionable = failure.actionable
+      throw err
     } finally {
       // Ensure window is always shown again
       showMainWindow()
@@ -206,20 +186,20 @@ export class ScreenshotHelper {
     }
   }
 
-  public async deleteScreenshot(path: string): Promise<{ success: boolean; error?: string }> {
+  public async deleteScreenshot(target: string): Promise<{ success: boolean; error?: string }> {
     try {
-      await fs.promises.unlink(path)
+      await fs.promises.unlink(target)
       if (this.view === "queue") {
-        this.screenshotQueue = this.screenshotQueue.filter((filePath) => filePath !== path)
+        this.screenshotQueue = this.screenshotQueue.filter((filePath) => filePath !== target)
       } else {
         this.extraScreenshotQueue = this.extraScreenshotQueue.filter(
-          (filePath) => filePath !== path
+          (filePath) => filePath !== target
         )
       }
       return { success: true }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting file:", error)
-      return { success: false, error: error.message }
+      return { success: false, error: error?.message ?? String(error) }
     }
   }
 }

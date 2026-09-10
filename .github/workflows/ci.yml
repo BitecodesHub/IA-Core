@@ -8,8 +8,15 @@ on:
 
 jobs:
   quality:
-    name: Lint · Typecheck · Test · Build
-    runs-on: macos-latest
+    name: Lint · Typecheck · Test · Build (${{ matrix.os }})
+    # Run the full gate on Windows as well as macOS: the app ships a Windows
+    # installer, and platform-specific breakage (path handling, capture
+    # backends, helper-binary resolution) is invisible in a macOS-only job.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 

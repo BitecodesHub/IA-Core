@@ -11,6 +11,20 @@ const isDev = process.env.NODE_ENV === "development"
 // which would refuse the connection even while the dev server is running.
 const startUrl = isDev ? "http://127.0.0.1:5180" : "app://bundle/index.html"
 
+/**
+ * Reduce a URL to a comparable `scheme://host[:port]` string. Used instead of
+ * `URL.prototype.origin`, which yields "null" for the app:// scheme because
+ * app: is not a WHATWG "special" scheme.
+ */
+function normalizeOrigin(input: string): string {
+  try {
+    const url = new URL(input)
+    return `${url.protocol}//${url.host || url.hostname}`.toLowerCase()
+  } catch {
+    return ""
+  }
+}
+
 export class WindowHelper {
   private mainWindow: BrowserWindow | null = null
   private isWindowVisible: boolean = false
@@ -135,19 +149,15 @@ export class WindowHelper {
     // requests. Pin to the known app origin (app://bundle in prod, the pinned
     // 127.0.0.1 dev server in dev) and deny everything else, including
     // redirects and unparsable URLs.
-    let allowedOrigin = ""
-    try {
-      allowedOrigin = new URL(startUrl).origin
-    } catch {
-      /* startUrl always valid; defensive only */
-    }
+    // `URL.prototype.origin` is the string "null" for a non-special scheme such
+    // as app:, so comparing origins that way would reject every in-app
+    // navigation in a packaged build. Compare scheme + host explicitly.
+    const allowedOrigins = new Set(
+      [startUrl, "app://bundle/index.html"].map(normalizeOrigin).filter(Boolean)
+    )
     const denyForeign = (e: Electron.Event, url: string) => {
-      try {
-        const origin = new URL(url).origin
-        if (origin !== "app://bundle" && origin !== allowedOrigin) e.preventDefault()
-      } catch {
-        e.preventDefault()
-      }
+      const origin = normalizeOrigin(url)
+      if (origin === "" || !allowedOrigins.has(origin)) e.preventDefault()
     }
     this.mainWindow.webContents.on("will-navigate", denyForeign)
     this.mainWindow.webContents.on("will-redirect", denyForeign)

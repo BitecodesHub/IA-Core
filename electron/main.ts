@@ -11,6 +11,12 @@ import { SettingsService } from "./config/SettingsService"
 import { SecretStore } from "./config/SecretStore"
 import { shouldSeedProviderKey } from "./config/seed"
 import { PROCESSING_EVENTS } from "./events"
+import {
+  installPermissionHandlers,
+  readPermissions,
+  requestStartupPermissions,
+  type PermissionReport,
+} from "./permissions"
 
 // The app:// scheme must be registered as standard + secure BEFORE app ready so
 // the production renderer loads from a real origin (see the protocol.handle in
@@ -36,6 +42,36 @@ process.on("unhandledRejection", (reason) => {
   if (isDev) console.error("[unhandledRejection]", reason)
 })
 
+/**
+ * Tray icon bitmap. Empty on macOS (a deliberately blank menu-bar slot, still
+ * clickable); the bundled icon on Windows/Linux, where an empty image produces
+ * an invisible — and therefore unusable — tray entry.
+ */
+function resolveTrayImage(): Electron.NativeImage {
+  if (process.platform === "darwin") return nativeImage.createEmpty()
+
+  const file = process.platform === "win32" ? "icons/win/icon.ico" : "icons/png/256x256.png"
+  const candidates = [
+    // Packaged: assets/ is copied via extraResources.
+    process.resourcesPath ? path.join(process.resourcesPath, "assets", file) : "",
+    // Dev: __dirname is dist-electron/.
+    path.join(__dirname, "..", "assets", file),
+  ].filter(Boolean)
+
+  for (const candidate of candidates) {
+    try {
+      const image = nativeImage.createFromPath(candidate)
+      if (!image.isEmpty()) return image
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  // Last resort: an empty image. The tray entry will be invisible on
+  // Windows/Linux, but Tray construction still succeeds rather than throwing on
+  // a missing icon file and taking the whole tray feature down.
+  return nativeImage.createEmpty()
+}
+
 export class AppState {
   private static instance: AppState | null = null
 
@@ -58,6 +94,9 @@ export class AppState {
   } | null = null // Allow null
 
   private hasDebugged: boolean = false
+
+  /** Result of the startup permission/capability check; surfaced over IPC. */
+  private permissionReport: PermissionReport | null = null
 
   // Processing events (single source of truth in ./events.ts).
   public readonly PROCESSING_EVENTS = PROCESSING_EVENTS
@@ -232,8 +271,11 @@ export class AppState {
     }
     if (this.tray) return
 
-    const trayImage = nativeImage.createEmpty()
-    this.tray = new Tray(trayImage)
+    // macOS renders an empty template image as a blank (stealthy) menu-bar slot
+    // that is still clickable. Windows and Linux do NOT: an empty image yields
+    // an invisible tray entry the user cannot find or click, which would make an
+    // explicitly-enabled tray useless. Load the real icon there.
+    this.tray = new Tray(resolveTrayImage())
 
     const contextMenu = Menu.buildFromTemplate([
       { label: "Show", click: () => this.centerAndShowWindow() },
@@ -280,6 +322,43 @@ export class AppState {
 
   public destroyHintOverlay(): void {
     this.hintOverlay.destroy()
+  }
+
+  public getPermissionReport(): PermissionReport | null {
+    return this.permissionReport
+  }
+
+  private publishPermissionReport(report: PermissionReport): PermissionReport {
+    this.permissionReport = report
+    if (isDev) console.log("[permissions]", report)
+    const win = this.getMainWindow()
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("permissions:changed", report)
+    }
+    return report
+  }
+
+  /**
+   * Re-read permission/capability state. Never prompts, so it is safe from any
+   * query path — a screen-capture status check must not pop a microphone
+   * dialog.
+   */
+  public async refreshPermissions(): Promise<PermissionReport> {
+    return this.publishPermissionReport(
+      await readPermissions(() => this.screenshotHelper.probe())
+    )
+  }
+
+  /**
+   * Startup pass: prompt for the one permission that CAN be requested (the
+   * macOS microphone grant) and probe the rest. Screen capture is never
+   * "requested" — macOS cannot be prompted programmatically and Windows has no
+   * such permission. See electron/permissions.ts.
+   */
+  public async requestPermissionsOnce(): Promise<PermissionReport> {
+    return this.publishPermissionReport(
+      await requestStartupPermissions(() => this.screenshotHelper.probe())
+    )
   }
 
   public setHasDebugged(value: boolean): void {
@@ -421,9 +500,24 @@ async function initializeApp() {
       secrets.setProviderApiKey("openrouter", (process.env.OPENROUTER_API_KEY as string).trim())
     }
 
+    // Allow-list the Chromium permissions the app actually needs (microphone,
+    // screen capture) for the app's own origin only, and deny everything else.
+    // Without an explicit handler the renderer's getUserMedia can be refused
+    // with no diagnosable reason — the app:// origin is not a web origin
+    // Chromium has any stored grant for.
+    installPermissionHandlers(["app://bundle", "http://127.0.0.1:5180"])
+
     appState.createWindow()
     appState.createTray()
     appState.shortcutsHelper.applyAll()
+
+    // Resolve every permission/capability once, up front: prompt for what can
+    // be prompted for (macOS microphone) and probe what cannot (screen capture
+    // on Windows/Linux, where no such permission exists). Failing this must not
+    // block startup — the overlay stays usable for text-only chat.
+    appState.requestPermissionsOnce().catch((err) => {
+      if (isDev) console.error("[permissions] startup check failed:", err)
+    })
   })
 
   app.on("activate", () => {

@@ -11,6 +11,7 @@ import type {
 } from "../../electron/shortcuts/types"
 import type { AcceleratorValidation } from "../../electron/shortcuts/validation"
 import type { ModelDiscoveryResult, ProviderHealth } from "../../electron/llm/providers"
+import type { PermissionReport } from "../../electron/permissions"
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
 
@@ -56,8 +57,14 @@ export interface ElectronAPI {
     analysisType: "analyze" | "answer"
   ) => Promise<{ success: boolean; error?: string }>
   cancelScreenshotProcessing: () => Promise<{ success: boolean; error?: string }>
-  onScreenshotError: (callback: (data: { message: string; code?: string }) => void) => () => void
+  onScreenshotError: (
+    callback: (data: { message: string; code?: string; actionable?: boolean }) => void
+  ) => () => void
   getScreenPermission: () => Promise<string>
+  getPermissions: () => Promise<PermissionReport>
+  refreshPermissions: () => Promise<PermissionReport>
+  onPermissionsChanged: (callback: (report: PermissionReport) => void) => () => void
+  openPrivacySettings: (kind: "screen" | "microphone") => Promise<{ ok: boolean }>
   openScreenRecordingSettings: () => Promise<{ ok: boolean }>
 
   // LLM model management

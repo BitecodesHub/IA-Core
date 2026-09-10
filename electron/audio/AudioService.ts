@@ -49,26 +49,62 @@ function firstExisting(candidates: string[]): string | null {
   return null
 }
 
-function resolveFfmpeg(): string {
-  return (
-    firstExisting(["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]) ??
-    "ffmpeg"
-  )
+const IS_WINDOWS = process.platform === "win32"
+/** Executable suffix. Bare names resolve through PATH; explicit paths need it. */
+const EXE = IS_WINDOWS ? ".exe" : ""
+
+/** Paths a bundled helper binary would be shipped at (packaged app). */
+function bundledBinaryPaths(name: string): string[] {
+  if (!process.resourcesPath) return []
+  return [
+    path.join(process.resourcesPath, "bin", `${name}${EXE}`),
+    path.join(process.resourcesPath, name, `${name}${EXE}`),
+  ]
 }
 
-/** Locate the whisper.cpp CLI: a bundled copy first (packaged app), then Homebrew/PATH. */
+/**
+ * Where a user-installed copy of a helper binary is likely to live.
+ * The previous implementation only ever checked POSIX prefixes, so on Windows
+ * every lookup fell through to a bare command name and whisper.cpp was reported
+ * as permanently unavailable even when installed.
+ */
+function windowsSearchPaths(name: string): string[] {
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files"
+  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)"
+  const localAppData = process.env.LOCALAPPDATA ?? ""
+  const chocolatey = process.env.ChocolateyInstall ?? "C:\\ProgramData\\chocolatey"
+  return [
+    `C:\\${name}\\bin\\${name}.exe`,
+    path.join(programFiles, name, "bin", `${name}.exe`),
+    path.join(programFiles, name, `${name}.exe`),
+    path.join(programFilesX86, name, "bin", `${name}.exe`),
+    path.join(chocolatey, "bin", `${name}.exe`),
+    // winget shims
+    localAppData ? path.join(localAppData, "Microsoft", "WinGet", "Links", `${name}.exe`) : "",
+    // scoop
+    localAppData ? path.join(localAppData, "..", "scoop", "shims", `${name}.exe`) : "",
+  ].filter(Boolean)
+}
+
+function posixSearchPaths(name: string): string[] {
+  return [`/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`, `/usr/bin/${name}`]
+}
+
+function resolveFfmpeg(): string {
+  const candidates = [
+    ...bundledBinaryPaths("ffmpeg"),
+    ...(IS_WINDOWS ? windowsSearchPaths("ffmpeg") : posixSearchPaths("ffmpeg")),
+  ]
+  // Falling back to the bare name lets a PATH install still work; spawn() then
+  // fails with ENOENT, which the caller reports as "ffmpeg not available".
+  return firstExisting(candidates) ?? `ffmpeg${EXE}`
+}
+
+/** Locate the whisper.cpp CLI: a bundled copy first (packaged app), then the OS's usual install locations. */
 function resolveWhisperCli(): string | null {
-  const bundled = process.resourcesPath
-    ? [
-        path.join(process.resourcesPath, "whisper", "whisper-cli"),
-        path.join(process.resourcesPath, "bin", "whisper-cli"),
-      ]
-    : []
   return firstExisting([
-    ...bundled,
-    "/opt/homebrew/bin/whisper-cli",
-    "/usr/local/bin/whisper-cli",
-    "/usr/bin/whisper-cli",
+    ...bundledBinaryPaths("whisper-cli"),
+    ...(IS_WINDOWS ? windowsSearchPaths("whisper-cli") : posixSearchPaths("whisper-cli")),
   ])
 }
 
@@ -192,23 +228,30 @@ export class AudioService {
     const wav = path.join(os.tmpdir(), "ia-core-audio", `${uuidv4()}.wav`)
     fs.mkdirSync(path.dirname(wav), { recursive: true })
     return new Promise((resolve, reject) => {
-      const ff = spawn(this.ffmpeg, [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        inputPath,
-        "-ar",
-        "16000",
-        "-ac",
-        "1",
-        "-c:a",
-        "pcm_s16le",
-        "-f",
-        "wav",
-        "-y",
-        wav,
-      ])
+      const ff = spawn(
+        this.ffmpeg,
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-i",
+          inputPath,
+          "-ar",
+          "16000",
+          "-ac",
+          "1",
+          "-c:a",
+          "pcm_s16le",
+          "-f",
+          "wav",
+          "-y",
+          wav,
+        ],
+        // Stealth: ffmpeg is a console app and this is a GUI process with no
+        // console, so Windows would otherwise flash a visible cmd window on
+        // every transcription. Node's windowsHide default is false.
+        { windowsHide: true }
+      )
       let err = ""
       let settled = false
       let watchdog: ReturnType<typeof setTimeout>
@@ -255,7 +298,8 @@ export class AudioService {
       args.push("-l", cfg.language)
     }
     return new Promise((resolve, reject) => {
-      const p = spawn(cli, args)
+      // windowsHide: see decodeToWav — prevents a console window flashing.
+      const p = spawn(cli, args, { windowsHide: true })
       let out = ""
       let err = ""
       let settled = false
@@ -342,7 +386,9 @@ export class AudioService {
       transformers = await import(specifier)
     } catch {
       throw new Error(
-        "No local transcription engine available. Install whisper.cpp (brew install whisper-cpp) or `npm install @xenova/transformers`."
+        IS_WINDOWS
+          ? "No local transcription engine available. Install whisper.cpp (winget install whisper-cpp, or place whisper-cli.exe on PATH) and ffmpeg (winget install Gyan.FFmpeg)."
+          : "No local transcription engine available. Install whisper.cpp (brew install whisper-cpp) or `npm install @xenova/transformers`."
       )
     }
     transformers.env.cacheDir = this.modelDir
@@ -367,20 +413,12 @@ export class AudioService {
   /** Decode any audio file to 16 kHz mono float32 PCM via ffmpeg (transformers.js input). */
   private decodeToPcm(inputPath: string): Promise<Float32Array> {
     return new Promise((resolve, reject) => {
-      const ff = spawn(this.ffmpeg, [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        inputPath,
-        "-ar",
-        "16000",
-        "-ac",
-        "1",
-        "-f",
-        "f32le",
-        "-",
-      ])
+      const ff = spawn(
+        this.ffmpeg,
+        ["-hide_banner", "-loglevel", "error", "-i", inputPath, "-ar", "16000", "-ac", "1", "-f", "f32le", "-"],
+        // windowsHide: see decodeToWav.
+        { windowsHide: true }
+      )
       const chunks: Buffer[] = []
       let err = ""
       let settled = false

@@ -10,6 +10,7 @@ import type {
   ImportResult,
 } from "./shortcuts/types"
 import type { AcceleratorValidation } from "./shortcuts/validation"
+import type { PermissionReport } from "./permissions"
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
 
@@ -81,8 +82,14 @@ interface ElectronAPI {
     analysisType: "analyze" | "answer"
   ) => Promise<{ success: boolean; error?: string }>
   cancelScreenshotProcessing: () => Promise<{ success: boolean; error?: string }>
-  onScreenshotError: (callback: (data: { message: string; code?: string }) => void) => () => void
+  onScreenshotError: (
+    callback: (data: { message: string; code?: string; actionable?: boolean }) => void
+  ) => () => void
   getScreenPermission: () => Promise<string>
+  getPermissions: () => Promise<PermissionReport>
+  refreshPermissions: () => Promise<PermissionReport>
+  onPermissionsChanged: (callback: (report: PermissionReport) => void) => () => void
+  openPrivacySettings: (kind: "screen" | "microphone") => Promise<{ ok: boolean }>
   openScreenRecordingSettings: () => Promise<{ ok: boolean }>
 
   // Settings
@@ -262,12 +269,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
   processScreenshotWithChoice: (analysisType: "analyze" | "answer") =>
     ipcRenderer.invoke("process-screenshot-with-choice", analysisType),
   cancelScreenshotProcessing: () => ipcRenderer.invoke("cancel-screenshot-processing"),
-  onScreenshotError: (callback: (data: { message: string; code?: string }) => void) => {
-    const subscription = (_: any, data: { message: string; code?: string }) => callback(data)
+  onScreenshotError: (
+    callback: (data: { message: string; code?: string; actionable?: boolean }) => void
+  ) => {
+    const subscription = (_: any, data: { message: string; code?: string; actionable?: boolean }) =>
+      callback(data)
     ipcRenderer.on("screenshot-error", subscription)
     return () => ipcRenderer.removeListener("screenshot-error", subscription)
   },
   getScreenPermission: () => ipcRenderer.invoke("get-screen-permission"),
+  getPermissions: () => ipcRenderer.invoke("get-permissions"),
+  refreshPermissions: () => ipcRenderer.invoke("refresh-permissions"),
+  onPermissionsChanged: (callback: (report: PermissionReport) => void) => {
+    const subscription = (_: any, report: PermissionReport) => callback(report)
+    ipcRenderer.on("permissions:changed", subscription)
+    return () => ipcRenderer.removeListener("permissions:changed", subscription)
+  },
+  openPrivacySettings: (kind: "screen" | "microphone") =>
+    ipcRenderer.invoke("open-privacy-settings", kind),
   openScreenRecordingSettings: () => ipcRenderer.invoke("open-screen-recording-settings"),
 
   // Settings
