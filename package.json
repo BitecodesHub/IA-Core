@@ -1,6 +1,6 @@
 {
   "name": "interview-coder",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "main": "./dist-electron/main.js",
   "scripts": {
     "clean": "rimraf dist dist-electron",
@@ -79,7 +79,7 @@
         }
       ],
       "icon": "assets/icons/mac/icon.icns",
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
       "entitlements": "assets/entitlements.mac.plist",
       "extendInfo": {
         "LSUIElement": true
@@ -118,7 +118,8 @@
         "!node_modules/@img/sharp-linux*/**",
         "!node_modules/@img/sharp-libvips-linux*/**",
         "!node_modules/@img/sharp-wasm32/**"
-      ]
+      ],
+      "identity": null
     },
     "win": {
       "target": [
@@ -256,7 +257,8 @@
     "npmRebuild": false,
     "portable": {
       "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
-    }
+    },
+    "afterPack": "scripts/adhoc-sign.cjs"
   },
   "keywords": [],
   "author": "",
