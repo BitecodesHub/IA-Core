@@ -2,6 +2,7 @@
 // `window.electronAPI`. Keep this in sync with electron/preload.ts.
 import type { AppSettings, ShortcutActionId, Binding } from "./settings"
 import type { BitecodesAuthState } from "../../electron/bitecodesAuth"
+import type { UpdateState } from "../../electron/updateCheck"
 import type {
   ShortcutsSnapshot,
   SetShortcutResult,
@@ -92,6 +93,11 @@ export interface ElectronAPI {
   bitecodesLogin: () => Promise<BitecodesAuthState>
   bitecodesCancel: () => Promise<BitecodesAuthState>
   bitecodesReopen: () => Promise<void>
+  bitecodesOpenPrivacy: () => Promise<void>
+  updateStatus: () => Promise<UpdateState>
+  updateCheck: () => Promise<UpdateState>
+  updateDownload: () => Promise<boolean>
+  onUpdateChanged: (cb: (s: UpdateState) => void) => () => void
   bitecodesLogout: () => Promise<BitecodesAuthState>
   onBitecodesChanged: (callback: (state: BitecodesAuthState) => void) => () => void
   getAiProviderSecretStatusAll: () => Promise<

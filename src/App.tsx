@@ -6,6 +6,7 @@ import Solutions from "./_pages/Solutions"
 import { QueryClient, QueryClientProvider } from "react-query"
 import ErrorBoundary from "./components/ErrorBoundary"
 import SignInGate, { useBitecodesSignedIn } from "./components/SignInGate"
+import { UpdateBanner, UpdateRequiredGate, useUpdateState } from "./components/UpdateBanner"
 import type { GeneralSettings } from "./types/settings"
 // window.electronAPI is typed canonically in src/types/electron.d.ts
 
@@ -26,6 +27,10 @@ const App: React.FC = () => {
   const [view, setView] = useState<"queue" | "solutions" | "debug">("queue")
   const containerRef = useRef<HTMLDivElement>(null)
   const signedIn = useBitecodesSignedIn()
+  const update = useUpdateState()
+  const blocked = update?.updateRequired === true
+  // Gates (sign-in, forced update) are centred cards; the working overlay is not.
+  const gated = blocked || signedIn !== true
 
   // Stealth-safe global safety net: swallow unhandled promise rejections / errors
   // so a stray async IPC failure never surfaces an OS error dialog outside the
@@ -93,7 +98,7 @@ const App: React.FC = () => {
           width: containerRef.current.scrollWidth,
           height: containerRef.current.scrollHeight,
           // The sign-in gate is a centred card; the working overlay stays put.
-          center: signedIn !== true,
+          center: gated,
         })
       })
     }
@@ -106,7 +111,7 @@ const App: React.FC = () => {
       if (rafId != null) cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
     }
-  }, [view, signedIn]) // Re-run when the rendered screen changes
+  }, [view, signedIn, blocked]) // Re-run when the rendered screen changes
 
   // Click-through control. The overlay window ignores mouse events by default
   // (clicks pass through its transparent areas to the app behind). While the
@@ -167,13 +172,18 @@ const App: React.FC = () => {
       {/* The gate is a fixed-size card: shrink the container to it (w-fit) so
           the window fits it exactly and can be centred; p-4 leaves room for
           its shadow inside the transparent window. */}
-      <div ref={containerRef} className={signedIn === true ? "min-h-0 text-white" : "w-fit p-4 text-white"}>
+      <div ref={containerRef} className={gated ? "w-fit p-4 text-white" : "min-h-0 text-white"}>
         <QueryClientProvider client={queryClient}>
           <ToastProvider>
-            {signedIn !== true ? (
+            {blocked && update ? (
+              <UpdateRequiredGate state={update} />
+            ) : signedIn !== true ? (
               <SignInGate checking={signedIn === null} />
             ) : view === "queue" ? (
-              <Queue setView={setView} />
+              <>
+                <UpdateBanner state={update} />
+                <Queue setView={setView} />
+              </>
             ) : view === "solutions" ? (
               <Solutions setView={setView} />
             ) : (

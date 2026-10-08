@@ -412,3 +412,15 @@ textarea:-webkit-autofill {
 .signin-gate button.gate-link:hover {
   color: rgba(255, 255, 255, 0.9) !important;
 }
+
+/* Gate cards (sign-in, update required) can be dragged anywhere on screen by
+   any non-interactive part; buttons and inputs stay clickable (no-drag above). */
+.gate-drag {
+  -webkit-app-region: drag;
+  cursor: move;
+  user-select: none;
+}
+.gate-drag button,
+.gate-drag [aria-label="Confirmation code"] {
+  cursor: pointer;
+}

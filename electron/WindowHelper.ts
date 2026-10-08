@@ -29,6 +29,10 @@ export class WindowHelper {
   private mainWindow: BrowserWindow | null = null
   private isWindowVisible: boolean = false
   private windowPosition: { x: number; y: number } | null = null
+  /** Set when the user drags the window (not our own setBounds). */
+  private gateMovedByUser = false
+  /** Whether the last sizing call was for a centred gate (sign-in / update). */
+  private gateShowing = false
   private windowSize: { width: number; height: number } | null = null
   private appState: AppState
 
@@ -69,9 +73,28 @@ export class WindowHelper {
    */
   public setWindowDimensions(width: number, height: number, center = false): void {
     if (!this.mainWindow || this.mainWindow.isDestroyed()) return
+    // Each time a gate appears it starts centred; only a drag made while the
+    // gate is showing keeps it where the user put it.
+    if (center && !this.gateShowing) this.gateMovedByUser = false
+    this.gateShowing = center
 
     if (center) {
       const area = screen.getDisplayMatching(this.mainWindow.getBounds()).workArea
+      if (this.gateMovedByUser) {
+        // The user dragged the card somewhere: resize in place (kept on
+        // screen) instead of snapping it back to the middle.
+        const [cx, cy] = this.mainWindow.getPosition()
+        const w = Math.min(Math.ceil(width), area.width)
+        const h = Math.min(Math.ceil(height), area.height)
+        const x = Math.min(Math.max(cx, area.x), area.x + area.width - w)
+        const y = Math.min(Math.max(cy, area.y), area.y + area.height - h)
+        this.mainWindow.setBounds({ x, y, width: w, height: h })
+        this.windowPosition = { x, y }
+        this.windowSize = { width: w, height: h }
+        this.currentX = x
+        this.currentY = y
+        return
+      }
       const w = Math.min(Math.ceil(width), area.width)
       const h = Math.min(Math.ceil(height), area.height)
       const x = area.x + Math.floor((area.width - w) / 2)
@@ -221,6 +244,12 @@ export class WindowHelper {
     // short of force-quitting. Reload it — at most 3 times a minute so a
     // deterministic crash cannot spin forever.
     const recentCrashes: number[] = []
+    // "will-move" fires only for user-initiated moves (dragging), never for
+    // our own setBounds, so it tells us the user placed the window themselves.
+    this.mainWindow.on("will-move", () => {
+      this.gateMovedByUser = true
+    })
+
     this.mainWindow.webContents.on("render-process-gone", (_e, details) => {
       console.error("[WindowHelper] renderer gone:", details.reason, details.exitCode)
       if (details.reason === "clean-exit") return

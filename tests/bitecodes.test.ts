@@ -164,3 +164,18 @@ describe("revocation", () => {
     expect(onUnauthorized).not.toHaveBeenCalled()
   })
 })
+
+describe("daily limits", () => {
+  it("turns QUOTA_EXCEEDED into a refusal (403) so the app moves on without retrying", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ code: "QUOTA_EXCEEDED", message: "You have reached today's limit." }), { status: 429 })
+    )
+    const p = new BitecodesProvider(config, () => "t", { fetchImpl: fetchImpl as any })
+    await expect(p.generate(req())).rejects.toThrow(/403: You have reached today's limit/)
+  })
+  it("keeps an ordinary 429 as a rate limit", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ code: "RATE_LIMITED", message: "slow down" }), { status: 429 }))
+    const p = new BitecodesProvider(config, () => "t", { fetchImpl: fetchImpl as any })
+    await expect(p.generate(req())).rejects.toThrow(/429: slow down/)
+  })
+})

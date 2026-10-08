@@ -12,6 +12,7 @@ import { VertexGeminiProvider } from "./llm/vertex"
 import { BedrockProvider } from "./llm/bedrock"
 import { BitecodesProvider, LOGIN_REQUIRED } from "./llm/bitecodes"
 import { BitecodesAuth, notesClient } from "./bitecodesAuth"
+import { UpdateChecker } from "./updateCheck"
 import { buildHealPatch, classifyModelError, planCandidateModels } from "./llm/modelFit"
 import { shouldAutoHealthCheck } from "./llm/mode"
 import {
@@ -286,6 +287,9 @@ export class LLMHelper {
    * which deletes it.
    */
   private requireSignIn(): void {
+    if (UpdateChecker.getInstance().isUpdateRequired()) {
+      throw new Error("This version of Notes is no longer supported. Download the update to continue.")
+    }
     if (!SecretStore.getInstance().hasProviderApiKey("bitecodes")) throw new Error(LOGIN_REQUIRED)
   }
 

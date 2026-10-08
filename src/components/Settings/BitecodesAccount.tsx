@@ -75,7 +75,7 @@ const BitecodesAccount: React.FC = () => {
     return (
       <div className="space-y-2 border border-white/10 rounded-md p-2" aria-label="Bitecodes sign-in">
         <p className="text-xs text-white/70">
-          Finish signing in in your browser. Approve only if it shows this code:
+          Enter this code on the Bitecodes page in your browser, then approve:
         </p>
         <p
           className="text-center font-mono text-lg tracking-[0.25em] text-white py-1 rounded bg-white/5"

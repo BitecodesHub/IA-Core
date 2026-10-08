@@ -65,7 +65,7 @@ const Mark: React.FC = () => (
 
 const Steps: React.FC<{ active: 1 | 2 }> = ({ active }) => (
   <ol className="mt-5 grid grid-cols-3 gap-2 text-[10px] text-white/50" aria-label="Sign-in steps">
-    {["Open browser", "Approve code", "Start using Notes"].map((label, i) => {
+    {["Open browser", "Enter code", "Start using Notes"].map((label, i) => {
       const n = i + 1
       const done = n < active
       const current = n === active
@@ -124,7 +124,7 @@ const SignInGate: React.FC<{ checking: boolean }> = ({ checking }) => {
 
   return (
     <div
-      className="signin-gate w-[400px] rounded-2xl border border-white/10 bg-neutral-950/95 p-6 text-white shadow-2xl shadow-black/60 backdrop-blur-xl"
+      className="signin-gate gate-drag w-[400px] rounded-2xl border border-white/10 bg-neutral-950/95 p-6 text-white shadow-2xl shadow-black/60 backdrop-blur-xl"
       data-overlay-interactive
       role="dialog"
       aria-modal="true"
@@ -132,7 +132,7 @@ const SignInGate: React.FC<{ checking: boolean }> = ({ checking }) => {
     >
       <Mark />
       <h1 id="signin-gate-title" className="text-center text-lg font-semibold tracking-tight">
-        {state?.phase === "waiting" ? "Confirm in your browser" : "Sign in to Notes"}
+        {state?.phase === "waiting" ? "Enter this code in your browser" : "Sign in to Notes"}
       </h1>
 
       {loading ? (
@@ -142,7 +142,7 @@ const SignInGate: React.FC<{ checking: boolean }> = ({ checking }) => {
       ) : state.phase === "waiting" ? (
         <>
           <p className="mt-1 text-center text-xs text-white/60">
-            Approve only if your browser shows this code.
+            Type it on the Bitecodes page that just opened, then approve.
           </p>
           <div className="mt-5 flex items-center justify-center gap-2">
             <p
@@ -204,6 +204,16 @@ const SignInGate: React.FC<{ checking: boolean }> = ({ checking }) => {
             Sign in with Bitecodes
           </button>
           <Steps active={1} />
+          <p className="mt-4 text-center text-[10px] leading-relaxed text-white/40">
+            Prompts and answers are stored by Bitecodes for 180 days. Screenshots are not stored.{" "}
+            <button
+              type="button"
+              className="gate-link underline underline-offset-2"
+              onClick={() => window.electronAPI.bitecodesOpenPrivacy?.()}
+            >
+              Privacy policy
+            </button>
+          </p>
         </>
       )}
 

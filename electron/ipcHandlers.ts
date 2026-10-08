@@ -10,7 +10,8 @@ import { SecretStore } from "./config/SecretStore"
 import type { AppSettings } from "./config/schema"
 import type { ShortcutActionId, Binding } from "./config/schema"
 import { openPrivacySettings } from "./permissions"
-import { BitecodesAuth } from "./bitecodesAuth"
+import { BitecodesAuth, BITECODES_PROVIDER_ID } from "./bitecodesAuth"
+import { UpdateChecker } from "./updateCheck"
 
 // Stealth: screenshot paths embed the OS username (via userData) and activity
 // timing is a forensic signal. Keep such logs out of production stdout/stderr.
@@ -353,6 +354,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     // Coerce defensively: a non-string apiKey would otherwise throw on .trim()
     // inside SecretStore and reject the IPC.
     if (typeof providerId !== "string") return { ok: false, error: "Invalid provider id." }
+    // The Bitecodes token is only ever written by the sign-in flow in the main
+    // process. Letting the renderer store one would let it fake a sign-in.
+    if (providerId === BITECODES_PROVIDER_ID) {
+      return { ok: false, error: "Use “Sign in with Bitecodes” instead." }
+    }
     return secrets.setProviderApiKey(providerId, String(apiKey ?? ""))
   })
 
@@ -381,6 +387,18 @@ export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle("bitecodes:login", async () => bitecodes.login())
   ipcMain.handle("bitecodes:cancel", async () => bitecodes.cancel())
   ipcMain.handle("bitecodes:reopen", async () => bitecodes.reopenBrowser())
+  ipcMain.handle("bitecodes:privacy", async () => bitecodes.openPrivacyPolicy())
+
+  // Update feed: state to the renderer (never the raw URL), download via main.
+  const updates = UpdateChecker.getInstance()
+  updates.onChange((state) => {
+    const win = appState.getMainWindow()
+    if (win && !win.isDestroyed()) win.webContents.send("update:changed", state)
+  })
+  ipcMain.handle("update:status", async () => updates.get())
+  ipcMain.handle("update:check", async () => updates.check())
+  ipcMain.handle("update:download", async () => updates.download())
+  updates.start()
   ipcMain.handle("bitecodes:logout", async () => bitecodes.logout())
 
   ipcMain.handle("ai-provider:secret-status-all", async () => {

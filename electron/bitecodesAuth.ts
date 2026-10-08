@@ -194,6 +194,11 @@ export class BitecodesAuth {
     if (this.state.phase === "waiting") void shell.openExternal(this.state.verificationUrl).catch(() => {})
   }
 
+  /** Opens the Bitecodes privacy policy (fixed path on the configured, allowlisted endpoint). */
+  openPrivacyPolicy(): void {
+    void shell.openExternal(`${this.endpoint.replace(/\/+$/, "")}/privacy`).catch(() => {})
+  }
+
   cancel(): BitecodesAuthState {
     this.generation++
     if (this.state.phase === "waiting") this.set({ phase: "signed-out" })

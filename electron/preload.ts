@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron"
 import type { BitecodesAuthState } from "./bitecodesAuth"
+import type { UpdateState } from "./updateCheck"
 import type { AppSettings, ShortcutActionId, Binding } from "./config/schema"
 import type { ModelDiscoveryResult, ProviderHealth } from "./llm/providers"
 import type {
@@ -81,6 +82,11 @@ interface ElectronAPI {
   bitecodesLogin: () => Promise<BitecodesAuthState>
   bitecodesCancel: () => Promise<BitecodesAuthState>
   bitecodesReopen: () => Promise<void>
+  bitecodesOpenPrivacy: () => Promise<void>
+  updateStatus: () => Promise<UpdateState>
+  updateCheck: () => Promise<UpdateState>
+  updateDownload: () => Promise<boolean>
+  onUpdateChanged: (cb: (s: UpdateState) => void) => () => void
   bitecodesLogout: () => Promise<BitecodesAuthState>
   onBitecodesChanged: (callback: (state: BitecodesAuthState) => void) => () => void
   getAiProviderSecretStatusAll: () => Promise<
@@ -279,6 +285,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   bitecodesLogin: () => ipcRenderer.invoke("bitecodes:login"),
   bitecodesCancel: () => ipcRenderer.invoke("bitecodes:cancel"),
   bitecodesReopen: () => ipcRenderer.invoke("bitecodes:reopen"),
+  bitecodesOpenPrivacy: () => ipcRenderer.invoke("bitecodes:privacy"),
+  updateStatus: () => ipcRenderer.invoke("update:status"),
+  updateCheck: () => ipcRenderer.invoke("update:check"),
+  updateDownload: () => ipcRenderer.invoke("update:download"),
+  onUpdateChanged: (cb: (s: UpdateState) => void) => {
+    const handler = (_e: unknown, s: UpdateState) => cb(s)
+    ipcRenderer.on("update:changed", handler)
+    return () => {
+      ipcRenderer.removeListener("update:changed", handler)
+    }
+  },
   bitecodesLogout: () => ipcRenderer.invoke("bitecodes:logout"),
   onBitecodesChanged: (callback: (state: BitecodesAuthState) => void) => {
     const subscription = (_: any, state: BitecodesAuthState) => callback(state)

@@ -25,13 +25,16 @@ function apiError(status: number, message: string): Error {
   return new Error(`Provider API error ${status}: ${message}`)
 }
 
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<{ message: string; code: string | null }> {
   const text = await res.text().catch(() => "")
   try {
     const parsed = JSON.parse(text)
-    return String(parsed?.message ?? parsed?.code ?? text).slice(0, 300)
+    return {
+      message: String(parsed?.message ?? parsed?.code ?? text).slice(0, 300),
+      code: typeof parsed?.code === "string" ? parsed.code : null,
+    }
   } catch {
-    return text.slice(0, 300) || res.statusText
+    return { message: text.slice(0, 300) || res.statusText, code: null }
   }
 }
 
@@ -138,8 +141,11 @@ export class BitecodesProvider implements LlmProvider {
       })
       kick()
       if (!res.ok) {
-        const message = await readError(res)
+        const { message, code } = await readError(res)
         if (res.status === 401) this.onUnauthorized?.()
+        // A daily cap will not lift on retry: report it as a refusal (403) so
+        // the app moves straight on instead of backing off and retrying.
+        if (res.status === 429 && code === "QUOTA_EXCEEDED") throw apiError(403, message)
         throw apiError(res.status, res.status === 401 ? `${message} ${SIGN_IN_REQUIRED}` : message)
       }
       const reader = res.body?.getReader()
