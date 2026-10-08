@@ -3,6 +3,8 @@
 // This file is the single source of truth for the application settings shape,
 // defaults, and value coercion. The Electron main process owns it; the renderer
 // imports the TYPES only (see `src/types/settings.ts`), so there is no runtime
+import { bedrockRegionOf } from "../llm/bedrockRegions"
+import { BITECODES_DEFAULT_ENDPOINT, isAllowedBitecodesEndpoint } from "../llm/bitecodes"
 // coupling and no cross-tree build emit.
 //
 // Coercion philosophy: settings must never crash the app. `coerceSettings()`
@@ -10,7 +12,7 @@
 // value with a sane default rather than throwing. This is what makes persisted
 // settings resilient to corruption, hand-editing, and forward/backward changes.
 
-export const SETTINGS_VERSION = 4
+export const SETTINGS_VERSION = 7
 
 export type ShortcutActionId =
   | "toggleWindow"
@@ -37,7 +39,12 @@ export type Binding = Accelerator | null
 
 /** Which reasoning tier the router uses. "auto" picks per-task via a heuristic. */
 export type ReasoningMode = "auto" | "low" | "high"
-export type AiProviderType = "ollama" | "openai-compatible"
+export type AiProviderType =
+  | "ollama"
+  | "openai-compatible"
+  | "vertex-gemini"
+  | "bedrock-converse"
+  | "bitecodes"
 export type AiCapability = "text" | "vision" | "json" | "streaming"
 
 export interface AiProviderSettings {
@@ -156,12 +163,37 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   version: SETTINGS_VERSION,
   ai: {
-    activeProviderId: "ollama",
+    // The Bitecodes model is the default; it needs a one-time browser sign-in.
+    activeProviderId: "bitecodes",
     fallbackProviderIds: [],
     reasoningMode: "auto",
     requestRetries: 1,
     healthCheckOnStart: true,
     providers: {
+      // Default provider: requests go to the user's Bitecodes account, which
+      // routes them through the operator's upstream providers. The model is
+      // chosen server-side and never shown, so the slots hold a placeholder.
+      bitecodes: {
+        id: "bitecodes",
+        name: "Bitecodes",
+        type: "bitecodes",
+        enabled: true,
+        endpoint: BITECODES_DEFAULT_ENDPOINT,
+        allowRemote: true,
+        apiKeyRequired: true,
+        lowModel: "bitecodes",
+        highModel: "bitecodes",
+        visionModel: "bitecodes",
+        fallbackModels: [],
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        numCtx: 4096,
+        numPredict: 4096,
+        // Screenshots run two model calls server-side (read, then solve).
+        timeoutMs: 300000,
+        keepAlive: "30m",
+      },
       ollama: {
         id: "ollama",
         name: "Ollama",
@@ -178,27 +210,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
         topP: 0.9,
         topK: 40,
         numCtx: 4096,
-        numPredict: 1024,
-        timeoutMs: 120000,
-        keepAlive: "30m",
-      },
-      "openai-compatible": {
-        id: "openai-compatible",
-        name: "OpenAI-compatible",
-        type: "openai-compatible",
-        enabled: false,
-        endpoint: "http://localhost:1234/v1",
-        allowRemote: false,
-        apiKeyRequired: false,
-        lowModel: "",
-        highModel: "",
-        visionModel: "",
-        fallbackModels: [],
-        temperature: 0.7,
-        topP: 0.9,
-        topK: 40,
-        numCtx: 4096,
-        numPredict: 1024,
+        numPredict: 4096,
         timeoutMs: 120000,
         keepAlive: "30m",
       },
@@ -225,7 +237,200 @@ export const DEFAULT_SETTINGS: AppSettings = {
         topP: 0.9,
         topK: 40,
         numCtx: 4096,
-        numPredict: 1024,
+        numPredict: 4096,
+        timeoutMs: 120000,
+        keepAlive: "30m",
+      },
+      // Direct OpenAI. Strong all-round vision baseline.
+      openai: {
+        id: "openai",
+        name: "OpenAI",
+        type: "openai-compatible",
+        // Disabled until the user supplies a key: an enabled provider with no
+        // key would surface as a spurious health-check failure at startup.
+        enabled: false,
+        endpoint: "https://api.openai.com/v1",
+        allowRemote: true,
+        apiKeyRequired: true,
+        // Model slots are intentionally left on Auto. Every one of these
+        // providers exposes /models, so the searchable picker fills itself in
+        // after Discover — and hard-coding IDs here would rot as they rename
+        // and retire models.
+        lowModel: "",
+        highModel: "",
+        visionModel: "",
+        fallbackModels: [],
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        numCtx: 4096,
+        numPredict: 4096,
+        timeoutMs: 120000,
+        keepAlive: "30m",
+      },
+      // Gemini via Google's OpenAI-compatibility endpoint. Strong OCR on dense screenshots.
+      gemini: {
+        id: "gemini",
+        name: "Google Gemini",
+        type: "openai-compatible",
+        // Disabled until the user supplies a key: an enabled provider with no
+        // key would surface as a spurious health-check failure at startup.
+        enabled: false,
+        endpoint: "https://generativelanguage.googleapis.com/v1beta/openai",
+        allowRemote: true,
+        apiKeyRequired: true,
+        // Model slots are intentionally left on Auto. Every one of these
+        // providers exposes /models, so the searchable picker fills itself in
+        // after Discover — and hard-coding IDs here would rot as they rename
+        // and retire models.
+        lowModel: "",
+        highModel: "",
+        visionModel: "",
+        fallbackModels: [],
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        numCtx: 4096,
+        numPredict: 4096,
+        timeoutMs: 120000,
+        keepAlive: "30m",
+      },
+      // Groq. Lowest latency of the hosted options, which matters most on the capture-to-answer path.
+      groq: {
+        id: "groq",
+        name: "Groq",
+        type: "openai-compatible",
+        // Disabled until the user supplies a key: an enabled provider with no
+        // key would surface as a spurious health-check failure at startup.
+        enabled: false,
+        endpoint: "https://api.groq.com/openai/v1",
+        allowRemote: true,
+        apiKeyRequired: true,
+        // Model slots are intentionally left on Auto. Every one of these
+        // providers exposes /models, so the searchable picker fills itself in
+        // after Discover — and hard-coding IDs here would rot as they rename
+        // and retire models.
+        lowModel: "",
+        highModel: "",
+        visionModel: "",
+        fallbackModels: [],
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        numCtx: 4096,
+        numPredict: 4096,
+        timeoutMs: 120000,
+        keepAlive: "30m",
+      },
+      // NVIDIA NIM (build.nvidia.com).
+      nvidia: {
+        id: "nvidia",
+        name: "NVIDIA NIM",
+        type: "openai-compatible",
+        // Disabled until the user supplies a key: an enabled provider with no
+        // key would surface as a spurious health-check failure at startup.
+        enabled: false,
+        endpoint: "https://integrate.api.nvidia.com/v1",
+        allowRemote: true,
+        apiKeyRequired: true,
+        // Model slots are intentionally left on Auto. Every one of these
+        // providers exposes /models, so the searchable picker fills itself in
+        // after Discover — and hard-coding IDs here would rot as they rename
+        // and retire models.
+        lowModel: "",
+        highModel: "",
+        visionModel: "",
+        fallbackModels: [],
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        numCtx: 4096,
+        numPredict: 4096,
+        timeoutMs: 120000,
+        keepAlive: "30m",
+      },
+      // Sharon AI Inference Engine (Australian GPU cloud). TokenVisor gateway;
+      // personal access tokens look like tv-pat-…
+      sharonai: {
+        id: "sharonai",
+        name: "Sharon AI",
+        type: "openai-compatible",
+        // Disabled until the user supplies a key: an enabled provider with no
+        // key would surface as a spurious health-check failure at startup.
+        enabled: false,
+        endpoint: "https://inference.sharonai.cloud/api/v1",
+        allowRemote: true,
+        apiKeyRequired: true,
+        // Model slots are intentionally left on Auto. Every one of these
+        // providers exposes /models, so the searchable picker fills itself in
+        // after Discover — and hard-coding IDs here would rot as they rename
+        // and retire models.
+        lowModel: "",
+        highModel: "",
+        visionModel: "",
+        fallbackModels: [],
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        numCtx: 4096,
+        numPredict: 4096,
+        timeoutMs: 120000,
+        keepAlive: "30m",
+      },
+      // Google Vertex AI (Express-mode API key), served from Sydney. Default
+      // model Gemini 2.5 Flash: fast, strong, and reads screenshots in ~3s.
+      vertex: {
+        id: "vertex",
+        name: "Google Vertex AI",
+        type: "vertex-gemini",
+        // Disabled until the user supplies a key: an enabled provider with no
+        // key would surface as a spurious health-check failure at startup.
+        enabled: false,
+        endpoint: "https://australia-southeast1-aiplatform.googleapis.com/v1",
+        allowRemote: true,
+        apiKeyRequired: true,
+        // Model slots are intentionally left on Auto. Every one of these
+        // providers exposes /models, so the searchable picker fills itself in
+        // after Discover — and hard-coding IDs here would rot as they rename
+        // and retire models.
+        lowModel: "gemini-2.5-flash",
+        highModel: "gemini-2.5-flash",
+        visionModel: "gemini-2.5-flash",
+        fallbackModels: [],
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        numCtx: 4096,
+        numPredict: 4096,
+        timeoutMs: 120000,
+        keepAlive: "30m",
+      },
+      // Amazon Bedrock via a Bedrock API key (bearer token), Converse API, Sydney
+      // region by default (selectable). Model slots stay on Auto: what is invocable
+      // depends on the account's model access and region, so discovery decides.
+      bedrock: {
+        id: "bedrock",
+        name: "Amazon Bedrock",
+        type: "bedrock-converse",
+        // Disabled until the user supplies a key: an enabled provider with no
+        // key would surface as a spurious health-check failure at startup.
+        enabled: false,
+        endpoint: "https://bedrock-runtime.ap-southeast-2.amazonaws.com",
+        allowRemote: true,
+        apiKeyRequired: true,
+        // Model slots are intentionally left on Auto. Every one of these
+        // providers exposes /models, so the searchable picker fills itself in
+        // after Discover — and hard-coding IDs here would rot as they rename
+        // and retire models.
+        lowModel: "",
+        highModel: "",
+        visionModel: "",
+        fallbackModels: [],
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+        numCtx: 4096,
+        numPredict: 4096,
         timeoutMs: 120000,
         keepAlive: "30m",
       },
@@ -241,7 +446,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     topP: 0.9,
     topK: 40,
     numCtx: 4096,
-    numPredict: 1024,
+    numPredict: 4096,
     timeoutMs: 120000,
     keepAlive: "30m",
   },
@@ -341,6 +546,14 @@ export function coerceProviderEndpoint(
   def: string,
   allowRemote: boolean
 ): string {
+  // Bedrock: region is user-selectable, but the endpoint receives the API key and
+  // every screenshot, so it must be a genuine AWS Bedrock runtime host.
+  if (type === "bitecodes") {
+    return typeof v === "string" && isAllowedBitecodesEndpoint(v) ? v.replace(/\/+$/, "") : def
+  }
+  if (type === "bedrock-converse") {
+    return typeof v === "string" && bedrockRegionOf(v) ? v.replace(/\/+$/, "") : def
+  }
   if (type === "ollama" || !allowRemote) return coerceEndpoint(v, def)
   if (typeof v !== "string") return def
   let url: URL
@@ -388,14 +601,52 @@ function strArray(v: unknown, def: string[]): string[] {
  * store `{openrouter: {id: "x", endpoint: "https://evil"}}` and slip past the pin
  * while still resolving to the openrouter provider (and its stored key).
  */
+/**
+ * Shape used to coerce a provider id that is not one of the bundled defaults
+ * (e.g. a user-added custom endpoint, or one imported from an older settings
+ * file). Previously the generic "openai-compatible" default entry doubled as
+ * this template; it has been removed as a selectable provider, so the template
+ * now stands on its own. A custom provider is OpenAI-compatible, disabled, and
+ * requires remote to be opted into per endpoint.
+ */
+export const CUSTOM_PROVIDER_TEMPLATE: Omit<AiProviderSettings, "id" | "name"> = {
+  type: "openai-compatible",
+  enabled: false,
+  endpoint: "http://localhost:1234/v1",
+  allowRemote: false,
+  apiKeyRequired: false,
+  lowModel: "",
+  highModel: "",
+  visionModel: "",
+  fallbackModels: [],
+  temperature: 0.7,
+  topP: 0.9,
+  topK: 40,
+  numCtx: 4096,
+  numPredict: 4096,
+  timeoutMs: 120000,
+  keepAlive: "30m",
+}
+
 export const PINNED_PROVIDER_ENDPOINTS: Record<string, string> = {
   openrouter: "https://openrouter.ai/api/v1",
+  openai: "https://api.openai.com/v1",
+  // Google's OpenAI-compatibility surface, so Gemini reuses
+  // OpenAICompatibleProvider instead of needing a native client.
+  gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
+  groq: "https://api.groq.com/openai/v1",
+  // NVIDIA NIM / build.nvidia.com.
+  nvidia: "https://integrate.api.nvidia.com/v1",
+  // Sharon AI Inference Engine (TokenVisor gateway, OpenAI-compatible).
+  sharonai: "https://inference.sharonai.cloud/api/v1",
+  // Vertex AI, Sydney region (australia-southeast1) — native Gemini API.
+  vertex: "https://australia-southeast1-aiplatform.googleapis.com/v1",
 }
 
 function coerceProvider(raw: unknown, def: AiProviderSettings): AiProviderSettings {
   const r = isObject(raw) ? raw : {}
-  const type = oneOf(r.type, def.type, ["ollama", "openai-compatible"] as const)
-  const allowRemote = type === "openai-compatible" ? bool(r.allowRemote, def.allowRemote) : false
+  const type = oneOf(r.type, def.type, ["ollama", "openai-compatible", "vertex-gemini", "bedrock-converse", "bitecodes"] as const)
+  const allowRemote = type !== "ollama" ? bool(r.allowRemote, def.allowRemote) : false
   return {
     id: providerId(r.id, def.id),
     name: str(r.name, def.name).slice(0, 80) || def.name,
@@ -475,10 +726,9 @@ export function coerceSettings(raw: unknown): AppSettings {
     const defProvider =
       providerDefaults[rawId] ??
       ({
-        ...providerDefaults["openai-compatible"],
+        ...CUSTOM_PROVIDER_TEMPLATE,
         id: rawId,
         name: rawId,
-        enabled: false,
       } satisfies AiProviderSettings)
     providers[rawId] = coerceProvider(providersRaw[rawId], defProvider)
     providers[rawId].id = rawId

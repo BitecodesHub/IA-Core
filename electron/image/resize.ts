@@ -8,7 +8,12 @@
 // `nativeImage`, which needs no native dependency at all.
 
 import fs from "node:fs"
-import { nativeImage } from "electron"
+import { nativeImage, screen } from "electron"
+import {
+  targetWidthForCapture,
+  pixelsPerLogicalPoint,
+  type DisplayGeometry,
+} from "./scale"
 
 const isDev = process.env.NODE_ENV === "development"
 
@@ -31,8 +36,34 @@ function loadSharp(): SharpModule | false {
 }
 
 export interface ResizeOptions {
+  /**
+   * Explicit target width. Omit to derive it from the connected displays, which
+   * is what keeps text legible across platforms — see ./scale. A hard-coded
+   * value here is almost always a bug: 1536 px is right for a Retina Mac and
+   * destroys text on a 1440p or 4K Windows desktop.
+   */
   maxWidth?: number
   quality?: number
+}
+
+/** Geometry of every connected display, for the DPI-aware width calculation. */
+export function currentDisplayGeometry(): DisplayGeometry[] {
+  try {
+    return screen.getAllDisplays().map((d) => {
+      const scale = d.scaleFactor > 0 ? d.scaleFactor : 1
+      return { logicalWidth: d.size.width, physicalWidth: Math.round(d.size.width * scale) }
+    })
+  } catch {
+    // screen is unavailable before app-ready; the caller falls back to the
+    // image's own width, which never downscales below legibility.
+    return []
+  }
+}
+
+/** Pixel width of an on-disk image, or 0 if it cannot be decoded. */
+function imageWidth(buffer: Buffer): number {
+  const probe = nativeImage.createFromBuffer(buffer)
+  return probe.isEmpty() ? 0 : probe.getSize().width
 }
 
 /**
@@ -41,12 +72,34 @@ export interface ResizeOptions {
  */
 export async function toResizedJpeg(
   imagePath: string,
-  { maxWidth = 1536, quality = 92 }: ResizeOptions = {}
+  { maxWidth, quality = 92 }: ResizeOptions = {}
+): Promise<Buffer> {
+  const source = await fs.promises.readFile(imagePath)
+  let target = maxWidth
+  if (target == null) {
+    const displays = currentDisplayGeometry()
+    const width = imageWidth(source)
+    target = targetWidthForCapture(width || 1536, displays)
+    if (isDev) {
+      const ratio = pixelsPerLogicalPoint(width || 1536, displays)
+      console.log(
+        `[image] ${width}px capture -> ${target}px (${ratio.toFixed(2)} px per logical point)`
+      )
+    }
+  }
+  return encodeJpeg(imagePath, source, target, quality)
+}
+
+async function encodeJpeg(
+  imagePath: string,
+  source: Buffer,
+  maxWidth: number,
+  quality: number
 ): Promise<Buffer> {
   const sharp = loadSharp()
   if (sharp) {
     try {
-      return await sharp(imagePath)
+      return await sharp(source)
         .resize({ width: maxWidth, withoutEnlargement: true })
         .jpeg({ quality })
         .toBuffer()
@@ -56,11 +109,16 @@ export async function toResizedJpeg(
       if (isDev) console.warn("[image] sharp resize failed, falling back:", err)
     }
   }
-  return resizeWithNativeImage(imagePath, maxWidth, quality)
+  return resizeWithNativeImage(imagePath, source, maxWidth, quality)
 }
 
-function resizeWithNativeImage(imagePath: string, maxWidth: number, quality: number): Buffer {
-  const image = nativeImage.createFromBuffer(fs.readFileSync(imagePath))
+function resizeWithNativeImage(
+  imagePath: string,
+  source: Buffer,
+  maxWidth: number,
+  quality: number
+): Buffer {
+  const image = nativeImage.createFromBuffer(source)
   if (image.isEmpty()) {
     throw new Error(`Could not decode image: ${imagePath}`)
   }

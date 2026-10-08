@@ -10,6 +10,7 @@ import { SecretStore } from "./config/SecretStore"
 import type { AppSettings } from "./config/schema"
 import type { ShortcutActionId, Binding } from "./config/schema"
 import { openPrivacySettings } from "./permissions"
+import { BitecodesAuth } from "./bitecodesAuth"
 
 // Stealth: screenshot paths embed the OS username (via userData) and activity
 // timing is a forensic signal. Keep such logs out of production stdout/stderr.
@@ -70,7 +71,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle("update-content-dimensions", async (_event, payload: unknown) => {
     // Validate: a malformed payload must not reach setWindowDimensions.
     if (typeof payload !== "object" || payload === null) return
-    const { width, height } = payload as { width?: unknown; height?: unknown }
+    const { width, height, center } = payload as { width?: unknown; height?: unknown; center?: unknown }
     if (
       typeof width === "number" &&
       typeof height === "number" &&
@@ -79,7 +80,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       width > 0 &&
       height > 0
     ) {
-      appState.setWindowDimensions(width, height)
+      appState.setWindowDimensions(width, height, center === true)
     }
   })
 
@@ -361,6 +362,35 @@ export function initializeIpcHandlers(appState: AppState): void {
       hasApiKey: secrets.hasProviderApiKey(providerId),
       secureStorageAvailable: secrets.isEncryptionAvailable(),
     }
+  })
+
+  // Key presence for every configured provider in one round trip. The provider
+  // picker needs this to mark providers as ready or "no key"; asking per
+  // provider would mean one IPC call per row on every render.
+  // Only booleans cross the boundary — never the keys themselves.
+  // "Sign in with Bitecodes". The renderer only ever sees the sign-in state and
+  // the short confirmation code — never the device token.
+  const bitecodes = BitecodesAuth.getInstance()
+  bitecodes.onChange((state) => {
+    // The token changed (signed in/out): drop cached discovery/health for it.
+    appState.processingHelper.getLLMHelper().invalidateProviderCache("bitecodes")
+    const win = appState.getMainWindow()
+    if (win && !win.isDestroyed()) win.webContents.send("bitecodes:changed", state)
+  })
+  ipcMain.handle("bitecodes:status", async () => bitecodes.status())
+  ipcMain.handle("bitecodes:login", async () => bitecodes.login())
+  ipcMain.handle("bitecodes:cancel", async () => bitecodes.cancel())
+  ipcMain.handle("bitecodes:reopen", async () => bitecodes.reopenBrowser())
+  ipcMain.handle("bitecodes:logout", async () => bitecodes.logout())
+
+  ipcMain.handle("ai-provider:secret-status-all", async () => {
+    const secureStorageAvailable = secrets.isEncryptionAvailable()
+    const providers = settings.get("ai").providers
+    return Object.keys(providers).map((providerId) => ({
+      providerId,
+      hasApiKey: secrets.hasProviderApiKey(providerId),
+      secureStorageAvailable,
+    }))
   })
 
   // IPC handler for screenshot analysis with user choice

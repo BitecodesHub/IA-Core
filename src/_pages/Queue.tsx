@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react"
+import { formatProviderError } from "../lib/providerError"
 import { Toast, ToastTitle, ToastDescription } from "../components/ui/toast"
 import QueueCommands from "../components/Queue/QueueCommands"
 import ChatPanel, { ChatMessage } from "../components/Queue/ChatPanel"
@@ -67,7 +68,9 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
           m.id === aiId
             ? {
                 ...m,
-                text: err.name === "AbortError" ? "Stopped" : "Couldn't complete that. Try again.",
+                // Show WHY it failed (dead model, bad key, rate limit...) — a
+                // generic message made every failure look identical.
+                text: err.name === "AbortError" ? "Stopped" : formatProviderError(err?.message ?? err),
                 isStreaming: false,
               }
             : m
@@ -145,11 +148,11 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
           )
           resolve()
         },
-        onError: () => {
+        onError: (error) => {
           setChatMessages((prev) =>
             prev.map((m) =>
               m.id === messageId
-                ? { ...m, text: "Couldn't complete that. Try again.", isStreaming: false }
+                ? { ...m, text: formatProviderError(error), isStreaming: false }
                 : m
             )
           )
@@ -202,7 +205,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
         // Stealth: no toast pop. Finalize any streaming placeholder in-place with a
         // subtle, in-context message so it never hangs on "Generating response…".
         const msg =
-          (error || "").trim().split("\n")[0].slice(0, 200) || "Could not process that. Try again."
+          error ? formatProviderError(error) : "Could not process that. Try again."
         setChatMessages((prev) => {
           const hasStreaming = prev.some((m) => m.isStreaming && m.role === "assistant")
           if (hasStreaming) {
@@ -277,7 +280,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
             ...prev,
             {
               role: "assistant" as const,
-              text: result.error ?? "Couldn't analyze that. Try again.",
+              text: result.error ? formatProviderError(result.error) : "Couldn't analyze that. Try again.",
               id: Date.now(),
             },
           ])

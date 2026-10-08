@@ -47,3 +47,25 @@ describe("NumberField clamping", () => {
     expect(screen.getByTestId("v")).toHaveTextContent("1")
   })
 })
+
+describe("TextField accessible name", () => {
+  it("names the field by its label alone, not label + hint", async () => {
+    const { default: TextField } = await import("../src/components/ui/TextField")
+    render(
+      <TextField
+        label="Endpoint"
+        value="https://api.groq.com/openai/v1"
+        hint="Groq endpoint is fixed for security."
+        readOnly
+        onCommit={() => {}}
+      />
+    )
+    // A nested sr-only hint used to be concatenated into the label text, so the
+    // accessible name was "Endpoint Groq endpoint is fixed for security."
+    const input = screen.getByLabelText("Endpoint") as HTMLInputElement
+    expect(input.value).toBe("https://api.groq.com/openai/v1")
+    expect(input.readOnly).toBe(true)
+    // The hint stays available as a description.
+    expect(input.getAttribute("aria-describedby")).toBeTruthy()
+  })
+})

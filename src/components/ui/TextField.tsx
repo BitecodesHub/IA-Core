@@ -13,8 +13,8 @@ interface TextFieldProps {
 
 /**
  * Controlled text setting field (endpoint, etc.). Reflects external changes when
- * unfocused, commits on blur/Enter, reverts on Escape. `readOnly` is used for the
- * pinned OpenRouter endpoint, whose edits would be no-ops.
+ * unfocused, commits on blur/Enter, reverts on Escape. `readOnly` is used for
+ * endpoints pinned in PINNED_PROVIDER_ENDPOINTS, whose edits would be no-ops.
  */
 const TextField: React.FC<TextFieldProps> = ({
   label,
@@ -28,9 +28,17 @@ const TextField: React.FC<TextFieldProps> = ({
   const id = useId()
   const hintId = hint ? `${id}-hint` : undefined
   const bind = useCommittedValue(value, onCommit)
+  // The hint span must sit OUTSIDE the <label>. Nested inside, its text is
+  // concatenated into the label's text content, so the field's accessible name
+  // became "Endpoint Groq endpoint is fixed for security." instead of
+  // "Endpoint" described by that sentence — which breaks screen-reader
+  // announcements and name-based queries alike. NumberField already has the
+  // correct shape; this now matches it.
   return (
-    <label htmlFor={id} className="flex flex-col gap-1 text-xs">
-      <span className="text-white/70">{label}</span>
+    <div className="flex flex-col gap-1 text-xs">
+      <label htmlFor={id} className="text-white/70">
+        {label}
+      </label>
       <input
         id={id}
         type="text"
@@ -48,7 +56,7 @@ const TextField: React.FC<TextFieldProps> = ({
           {hint}
         </span>
       )}
-    </label>
+    </div>
   )
 }
 

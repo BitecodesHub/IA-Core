@@ -1,6 +1,7 @@
 // Single canonical declaration of the preload bridge surface exposed on
 // `window.electronAPI`. Keep this in sync with electron/preload.ts.
 import type { AppSettings, ShortcutActionId, Binding } from "./settings"
+import type { BitecodesAuthState } from "../../electron/bitecodesAuth"
 import type {
   ShortcutsSnapshot,
   SetShortcutResult,
@@ -17,7 +18,7 @@ type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]>
 
 export interface ElectronAPI {
   // Window + screenshots
-  updateContentDimensions: (dimensions: { width: number; height: number }) => Promise<void>
+  updateContentDimensions: (dimensions: { width: number; height: number; center?: boolean }) => Promise<void>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>
   copyToClipboard: (text: string) => Promise<{ ok: boolean; error?: string }>
@@ -87,8 +88,19 @@ export interface ElectronAPI {
     hasApiKey: boolean
     secureStorageAvailable: boolean
   }>
+  bitecodesStatus: () => Promise<BitecodesAuthState>
+  bitecodesLogin: () => Promise<BitecodesAuthState>
+  bitecodesCancel: () => Promise<BitecodesAuthState>
+  bitecodesReopen: () => Promise<void>
+  bitecodesLogout: () => Promise<BitecodesAuthState>
+  onBitecodesChanged: (callback: (state: BitecodesAuthState) => void) => () => void
+  getAiProviderSecretStatusAll: () => Promise<
+    Array<{ providerId: string; hasApiKey: boolean; secureStorageAvailable: boolean }>
+  >
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
-  testLlmConnection: (providerId?: string) => Promise<{ success: boolean; error?: string }>
+  testLlmConnection: (
+    providerId?: string
+  ) => Promise<{ success: boolean; error?: string; warning?: string }>
 
   // Settings
   getSettings: () => Promise<AppSettings>

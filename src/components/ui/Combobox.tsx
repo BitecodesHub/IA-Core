@@ -271,7 +271,34 @@ const Combobox: React.FC<ComboboxProps> = ({
                     }}
                     onMouseEnter={() => setActive(i)}
                   >
-                    <span className="flex-1 truncate">{opt.label}</span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block truncate">{opt.label}</span>
+                      {opt.detail && (
+                        <span
+                          className={`block truncate text-[10px] ${
+                            i === active ? "text-black/60" : "text-white/45"
+                          }`}
+                        >
+                          {opt.detail}
+                        </span>
+                      )}
+                    </span>
+                    {opt.badges?.map((b) => (
+                      <span
+                        key={b.text}
+                        className={`text-[10px] px-1 rounded border shrink-0 ${
+                          i === active
+                            ? "border-black/40"
+                            : b.tone === "ok"
+                              ? "border-green-400/50 text-green-300"
+                              : b.tone === "warn"
+                                ? "border-amber-400/50 text-amber-300"
+                                : "border-white/25 text-white/60"
+                        }`}
+                      >
+                        {b.text}
+                      </span>
+                    ))}
                     {opt.free && (
                       <span
                         className={`text-[10px] px-1 rounded border ${

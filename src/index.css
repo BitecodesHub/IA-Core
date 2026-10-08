@@ -392,3 +392,23 @@ textarea:-webkit-autofill {
   -webkit-box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.05) inset !important;
   transition: background-color 5000s ease-in-out 0s;
 }
+
+/* Sign-in gate: opts out of the global glass button style above. */
+.signin-gate button.gate-primary {
+  background: #ffffff !important;
+  color: #0a0a0a !important;
+  border-color: transparent !important;
+  box-shadow: 0 6px 20px -6px rgba(255, 255, 255, 0.35) !important;
+}
+.signin-gate button.gate-primary:hover {
+  background: #e9e9ee !important;
+}
+.signin-gate button.gate-link {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  padding: 2px 4px;
+}
+.signin-gate button.gate-link:hover {
+  color: rgba(255, 255, 255, 0.9) !important;
+}

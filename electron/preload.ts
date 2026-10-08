@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
+import type { BitecodesAuthState } from "./bitecodesAuth"
 import type { AppSettings, ShortcutActionId, Binding } from "./config/schema"
 import type { ModelDiscoveryResult, ProviderHealth } from "./llm/providers"
 import type {
@@ -25,7 +26,7 @@ let chatSeq = 0
 
 // Types for the exposed Electron API
 interface ElectronAPI {
-  updateContentDimensions: (dimensions: { width: number; height: number }) => Promise<void>
+  updateContentDimensions: (dimensions: { width: number; height: number; center?: boolean }) => Promise<void>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>
   copyToClipboard: (text: string) => Promise<{ ok: boolean; error?: string }>
@@ -76,8 +77,19 @@ interface ElectronAPI {
     hasApiKey: boolean
     secureStorageAvailable: boolean
   }>
+  bitecodesStatus: () => Promise<BitecodesAuthState>
+  bitecodesLogin: () => Promise<BitecodesAuthState>
+  bitecodesCancel: () => Promise<BitecodesAuthState>
+  bitecodesReopen: () => Promise<void>
+  bitecodesLogout: () => Promise<BitecodesAuthState>
+  onBitecodesChanged: (callback: (state: BitecodesAuthState) => void) => () => void
+  getAiProviderSecretStatusAll: () => Promise<
+    Array<{ providerId: string; hasApiKey: boolean; secureStorageAvailable: boolean }>
+  >
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
-  testLlmConnection: (providerId?: string) => Promise<{ success: boolean; error?: string }>
+  testLlmConnection: (
+    providerId?: string
+  ) => Promise<{ success: boolean; error?: string; warning?: string }>
   processScreenshotWithChoice: (
     analysisType: "analyze" | "answer"
   ) => Promise<{ success: boolean; error?: string }>
@@ -137,7 +149,7 @@ export const PROCESSING_EVENTS = {
 
 // Expose the Electron API to the renderer process
 contextBridge.exposeInMainWorld("electronAPI", {
-  updateContentDimensions: (dimensions: { width: number; height: number }) =>
+  updateContentDimensions: (dimensions: { width: number; height: number; center?: boolean }) =>
     ipcRenderer.invoke("update-content-dimensions", dimensions),
   takeScreenshot: () => ipcRenderer.invoke("take-screenshot"),
   getScreenshots: () => ipcRenderer.invoke("get-screenshots"),
@@ -263,6 +275,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("ai-provider:set-api-key", providerId, apiKey),
   getAiProviderSecretStatus: (providerId: string) =>
     ipcRenderer.invoke("ai-provider:secret-status", providerId),
+  bitecodesStatus: () => ipcRenderer.invoke("bitecodes:status"),
+  bitecodesLogin: () => ipcRenderer.invoke("bitecodes:login"),
+  bitecodesCancel: () => ipcRenderer.invoke("bitecodes:cancel"),
+  bitecodesReopen: () => ipcRenderer.invoke("bitecodes:reopen"),
+  bitecodesLogout: () => ipcRenderer.invoke("bitecodes:logout"),
+  onBitecodesChanged: (callback: (state: BitecodesAuthState) => void) => {
+    const subscription = (_: any, state: BitecodesAuthState) => callback(state)
+    ipcRenderer.on("bitecodes:changed", subscription)
+    return () => ipcRenderer.removeListener("bitecodes:changed", subscription)
+  },
+  getAiProviderSecretStatusAll: () => ipcRenderer.invoke("ai-provider:secret-status-all"),
   switchToOllama: (model?: string, url?: string) =>
     ipcRenderer.invoke("switch-to-ollama", model, url),
   testLlmConnection: (providerId?: string) => ipcRenderer.invoke("test-llm-connection", providerId),

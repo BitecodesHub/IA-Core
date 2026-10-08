@@ -39,7 +39,7 @@ const PrivacyTab: React.FC<{ search?: string }> = () => {
         />
       </label>
 
-      {active?.type === "openai-compatible" && (
+      {active && active.type !== "ollama" && (
         <label className="flex items-center justify-between gap-3 text-xs">
           <span className="text-white/70">
             Allow remote AI endpoint

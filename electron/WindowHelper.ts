@@ -61,8 +61,28 @@ export class WindowHelper {
     this.mainWindow.setIgnoreMouseEvents(ignore, { forward: true })
   }
 
-  public setWindowDimensions(width: number, height: number): void {
+  /**
+   * Fits the window to its content. `center` places it in the middle of the
+   * screen it is on (used by the sign-in gate, which is a modal-style card);
+   * otherwise the top-left corner stays put so the overlay does not jump while
+   * the user works.
+   */
+  public setWindowDimensions(width: number, height: number, center = false): void {
     if (!this.mainWindow || this.mainWindow.isDestroyed()) return
+
+    if (center) {
+      const area = screen.getDisplayMatching(this.mainWindow.getBounds()).workArea
+      const w = Math.min(Math.ceil(width), area.width)
+      const h = Math.min(Math.ceil(height), area.height)
+      const x = area.x + Math.floor((area.width - w) / 2)
+      const y = area.y + Math.floor((area.height - h) / 2)
+      this.mainWindow.setBounds({ x, y, width: w, height: h })
+      this.windowPosition = { x, y }
+      this.windowSize = { width: w, height: h }
+      this.currentX = x
+      this.currentY = y
+      return
+    }
 
     // Get current window position
     const [currentX, currentY] = this.mainWindow.getPosition()
@@ -196,6 +216,20 @@ export class WindowHelper {
         if (isDev) console.error("Failed to load URL:", err)
       })
     }
+
+    // A crashed renderer leaves a frozen, blank overlay with no way to recover
+    // short of force-quitting. Reload it — at most 3 times a minute so a
+    // deterministic crash cannot spin forever.
+    const recentCrashes: number[] = []
+    this.mainWindow.webContents.on("render-process-gone", (_e, details) => {
+      console.error("[WindowHelper] renderer gone:", details.reason, details.exitCode)
+      if (details.reason === "clean-exit") return
+      const now = Date.now()
+      while (recentCrashes.length && now - recentCrashes[0] > 60_000) recentCrashes.shift()
+      if (recentCrashes.length >= 3) return
+      recentCrashes.push(now)
+      setTimeout(loadAppUrl, 500)
+    })
 
     // Surface renderer/preload load failures and a mounted-content check to the
     // main-process log — a blank window is almost always one of these, and the

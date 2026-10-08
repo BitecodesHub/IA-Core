@@ -27,6 +27,9 @@ export default defineWorkspace([
       include: ["tests/**/*.test.tsx"],
       setupFiles: ["tests/setup/dom.ts"],
       globals: true,
+      // userEvent-driven UI tests take ~2s alone and several times that when the
+      // whole suite runs in parallel; the 5s default made them flake under load.
+      testTimeout: 30_000,
     },
   },
 ])

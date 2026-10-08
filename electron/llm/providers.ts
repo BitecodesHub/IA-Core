@@ -1,5 +1,5 @@
 import type { AiCapability, AiProviderSettings } from "../config/schema"
-import { heuristicVision, takeLines, visionFromModality } from "./parse"
+import { heuristicVision, isUsableCatalogEntry, takeLines, visionFromModality } from "./parse"
 import { mapWithConcurrency } from "./concurrency"
 import { isTransientError, backoffDelayMs } from "./retry"
 
@@ -89,8 +89,18 @@ export interface GenerateRequest {
   images?: string[]
   options: GenerateOptions
   onToken?: (token: string) => void
+  /**
+   * Called on ANY streamed progress, including reasoning text that is not part
+   * of the answer. Lets the caller distinguish a model that is thinking from
+   * one that is stuck in a queue.
+   */
+  onActivity?: () => void
   signal?: AbortSignal
+  /** What the app is doing; only the Bitecodes provider reports it (for its log). */
+  kind?: RequestKind
 }
+
+export type RequestKind = "chat" | "screenshot" | "solution" | "debug" | "other"
 
 export interface LlmProvider {
   readonly config: AiProviderSettings
@@ -108,6 +118,15 @@ interface OpenAIChoiceDelta {
   // OpenRouter can emit an error frame with HTTP 200 (rate limit, moderation,
   // upstream failure); surface it instead of reporting empty content.
   error?: { message?: string } | string
+}
+
+/** True when an endpoint is OpenRouter, the only provider with native `models` failover. */
+export function isOpenRouterEndpoint(endpoint: string): boolean {
+  try {
+    return new URL(endpoint).hostname.toLowerCase().endsWith("openrouter.ai")
+  } catch {
+    return false
+  }
 }
 
 function joinUrl(base: string, suffix: string): string {
@@ -386,6 +405,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       }
     })
     return entries
+      .filter((entry) => isUsableCatalogEntry(entry))
       .map((entry) => {
         const name = String(entry?.id ?? "")
         // Provider modality metadata (OpenRouter architecture.input_modalities)
@@ -434,7 +454,28 @@ export class OpenAICompatibleProvider implements LlmProvider {
     }
   }
 
+  /**
+   * If a reasoning model spends its whole budget thinking (no answer text), try
+   * once more with a larger budget before reporting failure — the model works,
+   * it just needed room. Nothing was streamed to the user in that case, so the
+   * retry cannot duplicate output.
+   */
   async generate(request: GenerateRequest): Promise<string> {
+    try {
+      return await this.generateOnce(request)
+    } catch (err: any) {
+      const budget = request.options.numPredict
+      if (!/max_tokens exhausted before any answer/.test(err?.message ?? "") || budget >= 16384) {
+        throw err
+      }
+      return this.generateOnce({
+        ...request,
+        options: { ...request.options, numPredict: Math.min(Math.max(budget * 4, 8192), 16384) },
+      })
+    }
+  }
+
+  private async generateOnce(request: GenerateRequest): Promise<string> {
     if (this.config.apiKeyRequired && !this.getApiKey()) {
       throw new Error(`${this.config.name} requires an API key.`)
     }
@@ -458,11 +499,16 @@ export class OpenAICompatibleProvider implements LlmProvider {
         top_p: request.options.topP,
         max_tokens: request.options.numPredict,
       }
-      // OpenRouter native model fallback: if fallback models are configured, send a
-      // `models` array (primary first) so OpenRouter fails over to the next model on
-      // rate-limit/downtime. Harmless for endpoints that ignore the field.
+      // OpenRouter native model fallback: send a `models` array (primary first) so
+      // OpenRouter fails over server-side on rate-limit/downtime. ONLY for
+      // OpenRouter: strict OpenAI-compatible validators (NVIDIA NIM) reject any
+      // unknown field with "400 Unsupported parameter(s): models", which made every
+      // request fail as soon as a fallback list was configured. Other providers get
+      // client-side fallback in LLMHelper instead.
       const fallbacks = (this.config.fallbackModels ?? []).filter((m) => m && m !== request.model)
-      if (fallbacks.length > 0) body.models = [request.model, ...fallbacks]
+      if (fallbacks.length > 0 && isOpenRouterEndpoint(this.config.endpoint)) {
+        body.models = [request.model, ...fallbacks]
+      }
       const response = await fetch(joinUrl(this.config.endpoint, "/chat/completions"), {
         method: "POST",
         headers: { ...this.headers(), "Content-Type": "application/json" },
@@ -476,10 +522,21 @@ export class OpenAICompatibleProvider implements LlmProvider {
       if (!request.stream) {
         const data = (await response.json()) as OpenAIChoiceDelta
         const content = data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text
-        if (!content) throw new Error("No response content received from provider.")
+        if (!content || !String(content).trim()) {
+          const msg: any = data.choices?.[0]?.message
+          throw emptyAnswerError(
+            Boolean(msg?.reasoning_content || msg?.reasoning),
+            (data.choices?.[0] as any)?.finish_reason
+          )
+        }
         return content
       }
-      return this.readSse(response, request.onToken, idle.kick)
+      // Every received chunk is progress — including reasoning deltas that carry
+      // no answer text — so report it as activity as well as resetting the idle timer.
+      return this.readSse(response, request.onToken, () => {
+        idle.kick()
+        request.onActivity?.()
+      })
     } catch (err: any) {
       if (err?.name === "AbortError") {
         if (idle.state.timedOut) {
@@ -510,8 +567,11 @@ export class OpenAICompatibleProvider implements LlmProvider {
     const decoder = new TextDecoder()
     let full = ""
     let buffer = ""
+    let sawReasoning = false
+    let finishReason: string | undefined
+    let finished = false
     try {
-      while (true) {
+      while (!finished) {
         const { done, value } = await reader.read()
         if (done) break
         kick?.() // progress — a slow but live stream must never time out
@@ -522,11 +582,22 @@ export class OpenAICompatibleProvider implements LlmProvider {
           const trimmed = line.trim()
           if (!trimmed || trimmed.startsWith(":")) continue
           const payload = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed
-          if (payload === "[DONE]") return full
+          // [DONE] ends the stream, but must still fall through to the empty-
+          // answer check below: returning `full` here let a reasoning model that
+          // spent its whole budget thinking "succeed" with an EMPTY answer, which
+          // then blocked every fallback.
+          if (payload === "[DONE]") {
+            finished = true
+            break
+          }
           try {
             const data = JSON.parse(payload) as OpenAIChoiceDelta
             const errMsg = streamErrorMessage(data)
             if (errMsg) throw new Error(`Provider stream error: ${errMsg.slice(0, 500)}`)
+            const delta: any = data.choices?.[0]?.delta
+            if (delta?.reasoning_content || delta?.reasoning) sawReasoning = true
+            const reason = (data.choices?.[0] as any)?.finish_reason
+            if (reason) finishReason = reason
             const token = data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.text ?? ""
             if (token) {
               full += token
@@ -543,7 +614,22 @@ export class OpenAICompatibleProvider implements LlmProvider {
     } finally {
       reader.releaseLock()
     }
-    if (!full) throw new Error("No response content received from provider stream.")
+    if (!full.trim()) throw emptyAnswerError(sawReasoning, finishReason)
     return full
   }
+}
+
+/**
+ * An empty answer is a failure, never a success — so fallback can take over.
+ * Shaped as a 400 when the cause is the token budget, so the classifier treats
+ * it as "this model cannot take this request as configured" and moves on
+ * (another model, or the same one with a larger budget, can succeed).
+ */
+function emptyAnswerError(sawReasoning: boolean, finishReason?: string): Error {
+  if (finishReason === "length" || sawReasoning) {
+    return new Error(
+      `Provider API error 400: max_tokens exhausted before any answer text${sawReasoning ? " (the model spent it reasoning)" : ""}`
+    )
+  }
+  return new Error("No response content received from provider stream.")
 }

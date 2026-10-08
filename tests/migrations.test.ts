@@ -146,3 +146,16 @@ describe("full v1 -> v4 chain", () => {
     expect(s.ai.providers.ollama.visionModel).toBe("llava")
   })
 })
+
+describe("v5 -> v6 token budget migration", () => {
+  it("raises the old 1024 default to 4096 but keeps values the user chose", async () => {
+    const { runMigrations } = await import("../electron/config/migrations")
+    const out = runMigrations({ version: 5, ai: { providers: {
+      nvidia: { numPredict: 1024 }, vertex: { numPredict: 2000 }, ollama: { numPredict: 1024 },
+    } }, ollama: { numPredict: 1024 } }, 5, 6) as any
+    expect(out.ai.providers.nvidia.numPredict).toBe(4096)
+    expect(out.ai.providers.vertex.numPredict).toBe(2000) // user's own value kept
+    expect(out.ai.providers.ollama.numPredict).toBe(4096)
+    expect(out.ollama.numPredict).toBe(4096)
+  })
+})

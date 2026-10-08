@@ -3,6 +3,7 @@ import { useSettings } from "./useSettings"
 import type { AiProviderSettings, ReasoningMode } from "../../types/settings"
 import { modeForProviderId, type AiMode } from "../../../electron/llm/mode"
 import ProviderSection from "./ProviderSection"
+import ProviderPicker, { type ProviderKeyState } from "./ProviderPicker"
 
 const REASONING: { id: ReasoningMode; label: string; hint: string }[] = [
   { id: "auto", label: "Auto", hint: "Pick Low or High per task automatically" },
@@ -75,6 +76,26 @@ const ModelsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
   const { settings, update } = useSettings()
   const activeId = settings?.ai.activeProviderId ?? "ollama"
   const [onlineSel, setOnlineSel] = useState(activeId !== "ollama" ? activeId : "openrouter")
+  const [keyState, setKeyState] = useState<Record<string, ProviderKeyState>>({})
+
+  // One batched call rather than one per provider row.
+  useEffect(() => {
+    let cancelled = false
+    window.electronAPI
+      .getAiProviderSecretStatusAll?.()
+      .then((rows) => {
+        if (cancelled || !Array.isArray(rows)) return
+        setKeyState(
+          Object.fromEntries(rows.map((r) => [r.providerId, { hasApiKey: r.hasApiKey }]))
+        )
+      })
+      .catch(() => {
+        /* picker degrades to showing "no key" for key-requiring providers */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Track the active online provider so the online section reflects reality.
   useEffect(() => {
@@ -164,10 +185,13 @@ const ModelsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
         {onlineProviders.length > 1 && (
           <div className="flex items-center justify-between gap-2 text-xs">
             <span className="text-white/70">Online provider</span>
-            <RadioSegments
-              label="Online provider"
+            {/* A segmented control worked with one online provider and overflowed
+                the narrow panel once there were several; this searches instead. */}
+            <ProviderPicker
+              providers={onlineProviders}
               value={onlineSel}
-              options={onlineProviders.map((p) => ({ id: p.id, label: p.name }))}
+              activeProviderId={activeId}
+              keyState={keyState}
               onChange={pickOnline}
             />
           </div>

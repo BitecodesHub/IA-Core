@@ -10,6 +10,13 @@ export interface ModelLike {
 
 export type ComboKind = "auto" | "model" | "configured"
 
+/** A small status pill rendered on the right of an option row. */
+export interface ComboBadge {
+  text: string
+  /** ok = green, warn = amber, muted = grey. Defaults to muted. */
+  tone?: "ok" | "warn" | "muted"
+}
+
 export interface ComboOption {
   /** The value written to settings ("" for Auto). */
   value: string
@@ -17,6 +24,14 @@ export interface ComboOption {
   vision?: boolean
   free?: boolean
   kind: ComboKind
+  /** Secondary line under the label (e.g. a provider endpoint host). */
+  detail?: string
+  /**
+   * Generic status pills. `free`/`vision` stay as dedicated fields because they
+   * carry their own semantics in the model picker; this is for everything else
+   * (provider state, "no key", and so on).
+   */
+  badges?: ComboBadge[]
 }
 
 export interface BuildOptions {
@@ -58,18 +73,30 @@ export function rankFreeModel(name: string): number {
   return i < 0 ? FREE_FAMILY_RANK.length : i
 }
 
+// Capability ranking lives in the main-process module so the model PICKER (this
+// file) and the runtime FALLBACK planner (LLMHelper) order models identically.
+import { rankModelCapability } from "../../electron/llm/modelFit"
+export { rankModelCapability }
+
 /**
  * Build the option list for a model slot: an Auto option first, then (if the
  * configured value is not present in the discovered list — e.g. a hand-entered
  * or vision-filtered slug) a pinned "(configured)" option preserving it, then the
- * discovered models — free-tier models first (best-known families on top, see
- * rankFreeModel), then the rest in discovery order. Preserving the configured
+ * discovered models — free-tier models first, then paid, each group ordered
+ * most-capable-first (see rankModelCapability). Preserving the configured
  * value mirrors the old ModelsTab "(configured)" affordance so a valid slug is
  * never silently dropped.
  */
 export function buildModelOptions(models: ModelLike[], opts: BuildOptions): ComboOption[] {
   const { value, visionOnly, autoLabel } = opts
-  const list = visionOnly ? models.filter((m) => m.vision) : models
+  // Vision slot: normally restrict to vision-flagged models. But capability
+  // detection is heuristic and provider-dependent — NVIDIA NIM and many
+  // gateways report no modality metadata, so a strict filter can flag ZERO
+  // models and strand the user on "Auto" with nothing to pick. When that
+  // happens, fall back to the full list so a vision model can still be chosen
+  // by hand; selecting it also teaches discovery (it matches config.visionModel).
+  const visionList = models.filter((m) => m.vision)
+  const list = visionOnly ? (visionList.length > 0 ? visionList : models) : models
   const options: ComboOption[] = [{ value: "", label: autoLabel ?? "Auto", kind: "auto" }]
 
   if (value && !list.some((m) => m.name === value)) {
@@ -82,10 +109,14 @@ export function buildModelOptions(models: ModelLike[], opts: BuildOptions): Comb
     })
   }
 
-  const free = list
-    .filter((m) => m.free)
-    .sort((a, b) => rankFreeModel(a.name) - rankFreeModel(b.name) || a.name.localeCompare(b.name))
-  const paid = list.filter((m) => !m.free)
+  // Most capable first, within each group. Free models stay grouped ahead of
+  // paid so the "Free models" section header (Combobox) still lands correctly;
+  // within both groups the order is capability-ranked (best at top), tie-broken
+  // by name for stability.
+  const byCapability = (a: ModelLike, b: ModelLike) =>
+    rankModelCapability(a.name) - rankModelCapability(b.name) || a.name.localeCompare(b.name)
+  const free = list.filter((m) => m.free).sort(byCapability)
+  const paid = list.filter((m) => !m.free).sort(byCapability)
   for (const m of [...free, ...paid]) {
     options.push({ value: m.name, label: m.name, vision: m.vision, free: m.free, kind: "model" })
   }
@@ -101,6 +132,18 @@ function rankLabel(label: string, query: string): number {
 }
 
 /**
+ * Best (lowest) rank across an option's label and detail line.
+ * `rankLabel` uses -1 for "no match" and 0..2 for match quality, so the two
+ * scores cannot simply be min()'d — a -1 would win and drop a real match.
+ */
+function bestScore(option: ComboOption, query: string): number {
+  const scores = [rankLabel(option.label.toLowerCase(), query)]
+  if (option.detail) scores.push(rankLabel(option.detail.toLowerCase(), query))
+  const matches = scores.filter((s) => s >= 0)
+  return matches.length === 0 ? -1 : Math.min(...matches)
+}
+
+/**
  * Filter+rank options by a search query. The Auto and configured options are
  * always kept (pinned first); only model options are filtered. Ranking prefers
  * prefix, then word-boundary, then substring matches; ties keep discovery order.
@@ -111,7 +154,9 @@ export function filterOptions(options: ComboOption[], query: string): ComboOptio
   const pinned = options.filter((o) => o.kind !== "model")
   const scored = options
     .filter((o) => o.kind === "model")
-    .map((o, i) => ({ o, i, score: rankLabel(o.label.toLowerCase(), q) }))
+    // Match the detail line too, so a provider can be found by its host
+    // ("groq.com") as well as by its display name.
+    .map((o, i) => ({ o, i, score: bestScore(o, q) }))
     .filter((x) => x.score >= 0)
     .sort((a, b) => a.score - b.score || a.i - b.i)
     .map((x) => x.o)

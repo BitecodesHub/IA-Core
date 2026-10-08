@@ -47,6 +47,7 @@ dist/
 # Electron-builder output (packaged .app/.dmg — large binaries that also embed
 # any baked-in secrets; never commit these).
 release/
+release-*/
 
 # Local-only secret override (never commit real API keys).
 electron/config/staticKeys.local.ts
@@ -143,3 +144,4 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+.claude/test-fixtures/

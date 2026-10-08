@@ -190,8 +190,8 @@ export class AppState {
     this.windowHelper.toggleMainWindow()
   }
 
-  public setWindowDimensions(width: number, height: number): void {
-    this.windowHelper.setWindowDimensions(width, height)
+  public setWindowDimensions(width: number, height: number, center = false): void {
+    this.windowHelper.setWindowDimensions(width, height, center)
   }
 
   public setIgnoreMouseEvents(ignore: boolean): void {
@@ -483,21 +483,35 @@ async function initializeApp() {
       }
     })
 
-    // One-time provisioning: if an OpenRouter key is supplied via the environment
-    // and none is stored yet, persist it (encrypted, via SecretStore) so online
-    // mode works out of the box. The key is never written to settings or source.
+    // One-time provisioning: if a provider key is supplied via the environment and
+    // none is stored yet, persist it (encrypted, via SecretStore) so online mode
+    // works out of the box. Keys are never written to settings or source.
     // NOTE: a Finder-launched packaged app does not inherit the shell environment,
     // so this path applies to terminal/dev launches (npm run app:dev); otherwise
     // set the key in the Models tab (which also uses SecretStore).
     const secrets = SecretStore.getInstance()
-    if (
-      shouldSeedProviderKey(
-        secrets.hasProviderApiKey("openrouter"),
-        process.env.OPENROUTER_API_KEY,
-        secrets.isEncryptionAvailable()
-      )
-    ) {
-      secrets.setProviderApiKey("openrouter", (process.env.OPENROUTER_API_KEY as string).trim())
+    // Each provider that supports env seeding: provider id -> env var name.
+    // NVIDIA NIM (build.nvidia.com) issues a free-tier key, so `export
+    // NVIDIA_API_KEY=nvapi-...` lets the app run free out of the box with no
+    // click-through in Settings.
+    const ENV_KEY_SEEDS: Record<string, string> = {
+      openrouter: "OPENROUTER_API_KEY",
+      nvidia: "NVIDIA_API_KEY",
+      sharonai: "SHARONAI_API_KEY",
+      vertex: "VERTEX_API_KEY",
+      bedrock: "AWS_BEARER_TOKEN_BEDROCK",
+    }
+    for (const [providerId, envVar] of Object.entries(ENV_KEY_SEEDS)) {
+      const envValue = process.env[envVar]
+      if (
+        shouldSeedProviderKey(
+          secrets.hasProviderApiKey(providerId),
+          envValue,
+          secrets.isEncryptionAvailable()
+        )
+      ) {
+        secrets.setProviderApiKey(providerId, (envValue as string).trim())
+      }
     }
 
     // Allow-list the Chromium permissions the app actually needs (microphone,

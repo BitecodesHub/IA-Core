@@ -72,9 +72,12 @@ describe("Combobox", () => {
     render(<Harness models={MODELS} />)
     const input = screen.getByRole("combobox")
     await user.click(input)
-    // Active starts on Auto (index 0). Two downs → third option (claude at idx1, gpt at idx2? order: Auto, claude, gpt, llama)
+    // Active starts on Auto (index 0); two downs lands on the option at index 2.
+    // Derive the expected value from the same ordering the component uses, so the
+    // test validates keyboard nav without hard-coding the capability sort order.
+    const expected = buildModelOptions(MODELS, { value: "" })[2].value
     await user.keyboard("{ArrowDown}{ArrowDown}{Enter}")
-    expect(screen.getByTestId("val")).toHaveTextContent("openai/gpt-4o")
+    expect(screen.getByTestId("val")).toHaveTextContent(expected)
   })
 
   it("selects Auto (empty value)", async () => {

@@ -292,10 +292,14 @@ export class ProcessingHelper {
           basename: path.basename(imagePath),
         })
 
-      // Resize the screenshot before encoding — raw Retina PNGs can be 4-8 MB.
-      // Downsampling to 1280 px wide JPEG (q85) reduces payload to ~150-350 KB,
-      // which speeds up vision-model inference significantly without losing text legibility.
-      const resized = await toResizedJpeg(imagePath, { maxWidth: 1536, quality: 92 })
+      // Resize before encoding — a raw HiDPI PNG can be 4-8 MB, which is slow to
+      // upload and costs tokens for no gain. The target width is computed from
+      // the capturing display rather than fixed, so text arrives at roughly one
+      // pixel per logical point on every platform.
+      // No maxWidth: the target is derived from the display that produced the
+      // capture so text stays legible at ~1 pixel per logical point. A fixed
+      // width here was the cause of poor answers on 1440p/4K Windows desktops.
+      const resized = await toResizedJpeg(imagePath, { quality: 92 })
       const base64Image = resized.toString("base64")
 
       if (isDev)

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react"
 import Solutions from "./_pages/Solutions"
 import { QueryClient, QueryClientProvider } from "react-query"
 import ErrorBoundary from "./components/ErrorBoundary"
+import SignInGate, { useBitecodesSignedIn } from "./components/SignInGate"
 import type { GeneralSettings } from "./types/settings"
 // window.electronAPI is typed canonically in src/types/electron.d.ts
 
@@ -24,6 +25,7 @@ const queryClient = new QueryClient({
 const App: React.FC = () => {
   const [view, setView] = useState<"queue" | "solutions" | "debug">("queue")
   const containerRef = useRef<HTMLDivElement>(null)
+  const signedIn = useBitecodesSignedIn()
 
   // Stealth-safe global safety net: swallow unhandled promise rejections / errors
   // so a stray async IPC failure never surfaces an OS error dialog outside the
@@ -90,6 +92,8 @@ const App: React.FC = () => {
         window.electronAPI?.updateContentDimensions({
           width: containerRef.current.scrollWidth,
           height: containerRef.current.scrollHeight,
+          // The sign-in gate is a centred card; the working overlay stays put.
+          center: signedIn !== true,
         })
       })
     }
@@ -102,7 +106,7 @@ const App: React.FC = () => {
       if (rafId != null) cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
     }
-  }, [view]) // Re-run when view changes
+  }, [view, signedIn]) // Re-run when the rendered screen changes
 
   // Click-through control. The overlay window ignores mouse events by default
   // (clicks pass through its transparent areas to the app behind). While the
@@ -160,10 +164,15 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div ref={containerRef} className="min-h-0 text-white">
+      {/* The gate is a fixed-size card: shrink the container to it (w-fit) so
+          the window fits it exactly and can be centred; p-4 leaves room for
+          its shadow inside the transparent window. */}
+      <div ref={containerRef} className={signedIn === true ? "min-h-0 text-white" : "w-fit p-4 text-white"}>
         <QueryClientProvider client={queryClient}>
           <ToastProvider>
-            {view === "queue" ? (
+            {signedIn !== true ? (
+              <SignInGate checking={signedIn === null} />
+            ) : view === "queue" ? (
               <Queue setView={setView} />
             ) : view === "solutions" ? (
               <Solutions setView={setView} />

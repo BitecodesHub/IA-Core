@@ -38,6 +38,36 @@ describe("heuristicVision", () => {
       expect(heuristicVision(m)).toBe(false)
     }
   })
+
+  it("detects NVIDIA NIM-style multimodal ids (the stuck-on-Auto bug)", () => {
+    for (const m of [
+      "meta/llama-3.2-90b-vision-instruct",
+      "meta/llama-3.2-11b-vision-instruct",
+      "meta/llama-4-maverick-17b-128e-instruct",
+      "meta/llama-4-scout-17b-16e-instruct",
+      "microsoft/phi-3.5-vision-instruct",
+      "mistralai/pixtral-12b",
+      "qwen/qwen2-vl-72b-instruct",
+      "opengvlab/internvl2-26b",
+      "nvidia/vila",
+    ]) {
+      expect(heuristicVision(m), m).toBe(true)
+    }
+  })
+
+  it("does not flag NVIDIA coding/text or image-generation models as vision", () => {
+    for (const m of [
+      "qwen/qwen2.5-coder-32b-instruct",
+      "deepseek-ai/deepseek-r1",
+      "meta/llama-3.3-70b-instruct",
+      "mistralai/mixtral-8x22b-instruct-v0.1",
+      // image GENERATION — takes text, emits an image; not a vision-input model.
+      "black-forest-labs/flux.1-dev",
+      "stabilityai/sdxl",
+    ]) {
+      expect(heuristicVision(m), m).toBe(false)
+    }
+  })
 })
 
 describe("visionFromModality", () => {

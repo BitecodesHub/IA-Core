@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   buildModelOptions,
+  rankModelCapability,
   filterOptions,
   capOptions,
   autoHintForSlot,
@@ -144,5 +145,106 @@ describe("matchesSetting", () => {
     expect(matchesSetting("Temperature", "temp")).toBe(true)
     expect(matchesSetting("Temperature", "")).toBe(true)
     expect(matchesSetting("Temperature", "vision")).toBe(false)
+  })
+})
+
+
+describe("buildModelOptions — vision slot when no model is flagged vision", () => {
+  // The NVIDIA bug: discovery flagged every model non-vision, so a strict
+  // vision filter left only "Auto" and the user could not pick anything.
+  const models = [
+    { name: "meta/llama-4-maverick-17b-128e-instruct", vision: false },
+    { name: "qwen/qwen2.5-coder-32b-instruct", vision: false },
+  ]
+
+  it("falls back to the full list instead of showing only Auto", () => {
+    const opts = buildModelOptions(models, { value: "", visionOnly: true })
+    const values = opts.map((o) => o.value)
+    expect(values).toContain("meta/llama-4-maverick-17b-128e-instruct")
+    expect(values).toContain("qwen/qwen2.5-coder-32b-instruct")
+    // Still has Auto first.
+    expect(opts[0].kind).toBe("auto")
+  })
+
+  it("still restricts to vision models when at least one is flagged", () => {
+    const withVision = [
+      { name: "vision-model", vision: true },
+      { name: "text-model", vision: false },
+    ]
+    const values = buildModelOptions(withVision, { value: "", visionOnly: true }).map((o) => o.value)
+    expect(values).toContain("vision-model")
+    expect(values).not.toContain("text-model")
+  })
+})
+
+
+describe("rankModelCapability — most capable first", () => {
+  const sortNames = (names: string[]) =>
+    [...names].sort((a, b) => rankModelCapability(a) - rankModelCapability(b) || a.localeCompare(b))
+
+  it("ranks frontier families above mid-tier regardless of size token", () => {
+    const order = sortNames([
+      "meta/llama-3.1-8b-instruct",
+      "deepseek-ai/deepseek-r1",
+      "meta/llama-4-maverick-17b-128e-instruct",
+      "qwen/qwen2.5-7b-instruct",
+    ])
+    // Tier-0 (deepseek-r1, llama-4 maverick) must precede tier-1/2 regardless of
+    // their smaller parameter tokens.
+    expect(order.slice(0, 2).sort()).toEqual(
+      ["deepseek-ai/deepseek-r1", "meta/llama-4-maverick-17b-128e-instruct"].sort()
+    )
+    expect(order[order.length - 1]).toBe("meta/llama-3.1-8b-instruct")
+  })
+
+  it("prefers the larger model within the same tier", () => {
+    const order = sortNames([
+      "meta/llama-3.1-8b-instruct",
+      "meta/llama-3.1-70b-instruct",
+      "meta/llama-3.1-405b-instruct",
+    ])
+    expect(order).toEqual([
+      "meta/llama-3.1-405b-instruct",
+      "meta/llama-3.1-70b-instruct",
+      "meta/llama-3.1-8b-instruct",
+    ])
+  })
+
+  it("does not treat an expert count (128e) as a parameter size", () => {
+    // 17b is the real size; 128e must not inflate it.
+    expect(rankModelCapability("meta/llama-4-scout-17b-16e-instruct")).toBeLessThan(
+      rankModelCapability("some-unknown-model")
+    )
+  })
+
+  it("orders a mixed catalog best-first through buildModelOptions", () => {
+    const models = [
+      { name: "qwen/qwen2.5-7b-instruct", vision: false },
+      { name: "deepseek-ai/deepseek-r1", vision: false },
+      { name: "meta/llama-3.1-8b-instruct", vision: false },
+      { name: "meta/llama-4-maverick-17b-128e-instruct", vision: false },
+    ]
+    const values = buildModelOptions(models, { value: "" })
+      .filter((o) => o.kind === "model")
+      .map((o) => o.value)
+    // deepseek-r1 and llama-4 (tier 0) lead; llama-3.1-8b (tier 2) trails.
+    expect(values[values.length - 1]).toBe("meta/llama-3.1-8b-instruct")
+    expect(values.slice(0, 2)).toContain("deepseek-ai/deepseek-r1")
+    expect(values.slice(0, 2)).toContain("meta/llama-4-maverick-17b-128e-instruct")
+  })
+
+  it("keeps free models grouped ahead of paid, each ranked within", () => {
+    const models = [
+      { name: "paid-big", vision: false, free: false },
+      { name: "deepseek-r1-free", vision: false, free: true },
+      { name: "llama-3.1-8b-free", vision: false, free: true },
+    ]
+    const values = buildModelOptions(models, { value: "" })
+      .filter((o) => o.kind === "model")
+      .map((o) => o.value)
+    // Free group first; within it the stronger (deepseek-r1) ranks above the weaker.
+    expect(values[0]).toBe("deepseek-r1-free")
+    expect(values[1]).toBe("llama-3.1-8b-free")
+    expect(values[2]).toBe("paid-big")
   })
 })

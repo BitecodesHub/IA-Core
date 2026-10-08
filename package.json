@@ -1,6 +1,6 @@
 {
   "name": "interview-coder",
-  "version": "1.2.0",
+  "version": "1.7.0",
   "main": "./dist-electron/main.js",
   "scripts": {
     "clean": "rimraf dist dist-electron",
@@ -30,6 +30,8 @@
       "dist/**/*",
       "dist-electron/**/*",
       "package.json",
+      "!release/**",
+      "!release-*/**",
       "!node_modules/react-icons/**",
       "!node_modules/lucide-react/**",
       "!node_modules/@radix-ui/**",
@@ -81,6 +83,8 @@
         "LSUIElement": true
       },
       "files": [
+        "!release-*/**",
+        "!release/**",
         "!node_modules/@img/sharp-win32-*/**",
         "!node_modules/@img/sharp-linux*/**",
         "!node_modules/@img/sharp-libvips-linux*/**",
@@ -105,6 +109,8 @@
       "icon": "assets/icons/win/icon.ico",
       "requestedExecutionLevel": "asInvoker",
       "files": [
+        "!release-*/**",
+        "!release/**",
         "!node_modules/@img/sharp-darwin-*/**",
         "!node_modules/@img/sharp-libvips-darwin-*/**",
         "!node_modules/@img/sharp-linux*/**",
@@ -131,6 +137,8 @@
       "icon": "assets/icons/png/",
       "category": "Office",
       "files": [
+        "!release-*/**",
+        "!release/**",
         "!node_modules/@img/sharp-win32-*/**",
         "!node_modules/@img/sharp-darwin-*/**",
         "!node_modules/@img/sharp-libvips-darwin-*/**",

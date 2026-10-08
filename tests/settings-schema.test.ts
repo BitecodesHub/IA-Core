@@ -168,14 +168,14 @@ describe("OpenRouter online provider (defaults, offline default, endpoint pin)",
     expect(s.ai.providers.openrouter.fallbackModels).toEqual(["a", "b"])
   })
 
-  it("defaults to the offline (ollama) provider", () => {
-    expect(coerceSettings({}).ai.activeProviderId).toBe("ollama")
-    // An unset/invalid active id resolves to ollama (offline).
+  it("defaults to the Bitecodes provider (sign-in required)", () => {
+    expect(coerceSettings({}).ai.activeProviderId).toBe("bitecodes")
+    // An unset/invalid active id resolves to the default (Bitecodes).
     expect(coerceSettings({ ai: { activeProviderId: "does-not-exist" } }).ai.activeProviderId).toBe(
-      "ollama"
+      "bitecodes"
     )
     expect(coerceSettings({ ai: { activeProviderId: "!!bad id!!" } }).ai.activeProviderId).toBe(
-      "ollama"
+      "bitecodes"
     )
   })
 

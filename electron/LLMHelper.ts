@@ -3,20 +3,27 @@ import { SettingsService } from "./config/SettingsService"
 import { SecretStore } from "./config/SecretStore"
 import { AudioService } from "./audio/AudioService"
 import type { AiProviderSettings } from "./config/schema"
-import { cleanJsonResponse } from "./llm/parse"
+import { cleanJsonResponse, heuristicVision } from "./llm/parse"
 import { selectModel, type TaskContext, type ModelTiers } from "./llm/router"
 import { pickModel } from "./llm/pick"
 import { isTransientError, backoffDelayMs } from "./llm/retry"
 import { recommendedModels } from "./llm/defaults"
+import { VertexGeminiProvider } from "./llm/vertex"
+import { BedrockProvider } from "./llm/bedrock"
+import { BitecodesProvider, LOGIN_REQUIRED } from "./llm/bitecodes"
+import { BitecodesAuth, notesClient } from "./bitecodesAuth"
+import { buildHealPatch, classifyModelError, planCandidateModels } from "./llm/modelFit"
 import { shouldAutoHealthCheck } from "./llm/mode"
 import {
   OllamaProvider,
   OpenAICompatibleProvider,
+  isOpenRouterEndpoint,
   type GenerateOptions,
   type LlmProvider,
   type ModelInfo,
   type ModelDiscoveryResult,
   type ProviderHealth,
+  type RequestKind,
 } from "./llm/providers"
 
 interface GenerateOpts {
@@ -24,9 +31,13 @@ interface GenerateOpts {
   images?: string[]
   model?: string
   providerId?: string
+  /** Providers to leave out of the sequence (e.g. one already tried). */
+  skipProviderIds?: string[]
   onToken?: (token: string) => void
   signal?: AbortSignal
   temperatureCap?: number
+  /** Reported to Bitecodes' prompt log (chat, screenshot, solution, debug). */
+  kind?: RequestKind
 }
 
 // Extra retry budget for transient failures, on top of the user's requestRetries
@@ -34,6 +45,45 @@ interface GenerateOpts {
 // generous; total wall-clock is bounded only by the idle-timeout per attempt.
 const MAX_TRANSIENT_RETRIES = 5
 const RETRY_BASE_MS = 500
+/**
+ * Streaming hedge: if a remote model has not produced its FIRST token within
+ * this window and another candidate model exists, abandon it and try the next.
+ * Measured on NVIDIA NIM's free tier: llama-3.2-90b-vision queued 13-32s and
+ * once stalled ~160s, while llama-3.2-11b-vision answered in 0.4s. Without a
+ * hedge a queued model held the screenshot flow hostage for minutes ("stuck").
+ * Generous enough that a healthy large model normally answers within it.
+ */
+const FIRST_TOKEN_DEADLINE_MS = 30_000
+/** Known number in the vision-probe image, and how long the probe may take. */
+const VISION_PROBE_NUMBER = "4827"
+const VISION_PROBE_TIMEOUT_MS = 25_000
+
+/** Stage 1 of screenshot analysis: faithful transcription, no reasoning. */
+const SCREENSHOT_TRANSCRIBE_PROMPT = `Transcribe the meaningful content of this screenshot exactly, character for character.
+Include: any question or problem statement (with its title), all options/choices, constraints, examples with their inputs and outputs, tables, formulas, and any code (keep indentation and the exact function/class signatures).
+Ignore browser chrome, menus, toolbars and other UI clutter.
+Do NOT solve, explain or summarise anything. Output only the transcription.`
+
+/** A transcription worth reasoning over (not empty, not a refusal). */
+function isUsableTranscript(text: string): boolean {
+  const t = String(text ?? "").trim()
+  if (t.length < 20) return false
+  return !/(not able|unable|can(?:no|')t) (?:to )?(?:view|see|read|process) (?:the )?images?/i.test(t.slice(0, 300))
+}
+
+/** Stage 2 prompt: the original task, answered from the transcription. */
+function buildSolvePrompt(task: string, transcript: string): string {
+  return `${task}
+
+You cannot see the screenshot directly. It has been transcribed exactly below; treat this transcription as the screenshot and base your answer ONLY on it. Pay close attention to the exact problem title, function signature and examples.
+If it is a programming problem, the screenshot may not show the constraints: assume the LARGEST constraints usual for that problem and use the asymptotically optimal algorithm (never a naive simulation when inputs can be huge). Keep the exact function signature shown.
+
+<<<SCREENSHOT
+${transcript.trim()}
+SCREENSHOT>>>`
+}
+// Stealth: model-healing notes mention model ids/timing — dev only.
+const isDev = process.env.NODE_ENV === "development"
 const RETRY_CAP_MS = 8000
 
 /**
@@ -48,6 +98,20 @@ export class LLMHelper {
   private settings = SettingsService.getInstance()
   private autoModels = new Map<string, string>()
   private modelCache = new Map<string, { at: number; models: ModelInfo[] }>()
+  /**
+   * Models a provider has proven gone (404/410) in this session, per provider.
+   * They are skipped instead of re-failing on every request until the app
+   * restarts or the provider's endpoint changes.
+   */
+  private deadModels = new Map<string, Set<string>>()
+  /**
+   * Vision-probe verdicts per "<provider>::<model>". Catalog metadata is not
+   * trustworthy here — on Sharon AI, nemotron-3-super advertises "image" but
+   * returns 422, and gpt-oss-120b advertises "image" but replies "I'm not able
+   * to view images". A one-time probe per model per session settles it.
+   */
+  private visionVerdicts = new Map<string, boolean>()
+  private probeImage: Promise<string | null> | null = null
 
   constructor() {
     this.initialize().catch((err) =>
@@ -64,10 +128,10 @@ export class LLMHelper {
     return ai.providers[ai.activeProviderId] ?? ai.providers.ollama
   }
 
-  private providerSequence(providerId?: string): AiProviderSettings[] {
+  private providerSequence(providerId?: string, skip: string[] = []): AiProviderSettings[] {
     const ai = this.settings.get("ai")
     const ids = providerId ? [providerId] : [ai.activeProviderId, ...ai.fallbackProviderIds]
-    const seen = new Set<string>()
+    const seen = new Set<string>(skip)
     return ids
       .filter((id) => {
         if (seen.has(id)) return false
@@ -80,6 +144,22 @@ export class LLMHelper {
 
   private createProvider(config: AiProviderSettings): LlmProvider {
     if (config.type === "ollama") return new OllamaProvider(config)
+    if (config.type === "bitecodes") {
+      return new BitecodesProvider(config, () => SecretStore.getInstance().getProviderApiKey(config.id), {
+        onUnauthorized: () => BitecodesAuth.getInstance().handleRevoked(),
+        client: notesClient(),
+      })
+    }
+    if (config.type === "bedrock-converse") {
+      return new BedrockProvider(config, () =>
+        SecretStore.getInstance().getProviderApiKey(config.id)
+      )
+    }
+    if (config.type === "vertex-gemini") {
+      return new VertexGeminiProvider(config, () =>
+        SecretStore.getInstance().getProviderApiKey(config.id)
+      )
+    }
     return new OpenAICompatibleProvider(config, () =>
       SecretStore.getInstance().getProviderApiKey(config.id)
     )
@@ -199,9 +279,20 @@ export class LLMHelper {
     })
   }
 
+  /**
+   * Notes only works for signed-in Bitecodes users. Enforced here, in the main
+   * process, so no renderer path (shortcuts, auto-screenshot, chat) gets around
+   * it. A token is enough: a revoked one is caught by BitecodesAuth.status(),
+   * which deletes it.
+   */
+  private requireSignIn(): void {
+    if (!SecretStore.getInstance().hasProviderApiKey("bitecodes")) throw new Error(LOGIN_REQUIRED)
+  }
+
   private async generate(prompt: string, opts: GenerateOpts = {}): Promise<string> {
+    this.requireSignIn()
     const ctx: TaskContext = { prompt, hasImage: Boolean(opts.images?.length) }
-    const providers = this.providerSequence(opts.providerId)
+    const providers = this.providerSequence(opts.providerId, opts.skipProviderIds)
     if (providers.length === 0) throw new Error("No enabled AI provider is configured.")
 
     const errors: string[] = []
@@ -216,51 +307,279 @@ export class LLMHelper {
           opts.onToken!(t)
         }
       : undefined
-    for (const config of providers) {
+    for (const [providerIndex, config] of providers.entries()) {
+      // A revoked sign-in (401 from Bitecodes) ends the chain: no fallback
+      // provider may answer for a signed-out user.
+      this.requireSignIn()
       const provider = this.createProvider(config)
-      let model = opts.model
-      try {
-        model = model || (await this.chooseModel(config, ctx))
-      } catch (err: any) {
-        errors.push(`${config.name}: ${err?.message ?? err}`)
-        continue
+      // When another provider is waiting, a struggling one gets a short leash:
+      // the generous transient budget exists for a user with ONE provider on a
+      // flaky link. With a fallback available, burning ~40s of backoff on a dead
+      // provider before trying a healthy one measured 434s end to end.
+      const hasFallbackProvider = providerIndex < providers.length - 1
+
+      // Ordered list of models to try on this provider. An explicit model is
+      // honoured strictly; otherwise start with the routed choice and fall back
+      // to the user's other configured models, then to the best models the
+      // provider actually serves (vision-capable ones for screenshots).
+      let candidates: string[]
+      let discovered: ModelInfo[] | null = null
+      if (opts.model) {
+        candidates = [opts.model]
+      } else {
+        let primary: string
+        try {
+          primary = await this.chooseModel(config, ctx)
+        } catch (err: any) {
+          errors.push(`${config.name}: ${err?.message ?? err}`)
+          continue
+        }
+        // chooseModel just populated the 30s discovery cache, so this is free.
+        discovered = await this.discoverModels(config.id).catch((): null => null)
+        candidates = planCandidateModels({
+          config,
+          hasImage: ctx.hasImage,
+          primary,
+          discovered,
+          dead: this.deadSet(config.id),
+          nativeFallback: isOpenRouterEndpoint(config.endpoint),
+          guessVision: heuristicVision,
+        })
       }
 
-      // Retry budget: a transient/network failure gets the generous transient
-      // budget so a slow or flaky connection recovers on its own; a terminal
-      // error (auth, bad request) is not retried and moves to the next provider.
-      let attempt = 0
-      while (true) {
-        try {
-          return await provider.generate({
-            prompt,
-            model,
-            stream: opts.stream ?? false,
-            images: opts.images,
-            onToken,
-            signal: opts.signal,
-            options: this.generationOptions(config, opts.temperatureCap),
-          })
-        } catch (err: any) {
-          const message = err?.message ?? String(err)
+      const gone: string[] = []
+      // Models that answered the vision probe wrongly: still fine for text, so
+      // they are never marked dead — only healed out of the vision slot.
+      const blind: string[] = []
+      let nextProvider = false
+      for (const [index, model] of candidates.entries()) {
+        if (nextProvider) break
+        // Bitecodes verifies vision server-side; probing it would cost a round trip.
+        if (ctx.hasImage && !opts.model && config.type !== "ollama" && config.type !== "bitecodes") {
+          const sees = await this.verifyVision(provider, config, model, opts.signal)
           if (opts.signal?.aborted) throw new Error("Request cancelled.")
-          // Never replay a partially-streamed response (would duplicate output).
-          if (streamedAny) throw err instanceof Error ? err : new Error(message)
-          const transient = isTransientError(message)
-          const budget = transient ? Math.max(retries, MAX_TRANSIENT_RETRIES) : retries
-          if (attempt >= budget) {
-            errors.push(`${config.name}/${model}: ${message}`)
-            break // give up on this provider; try the next in the sequence
+          if (!sees) {
+            blind.push(model)
+            errors.push(`${config.name}/${model}: cannot read images (vision check failed)`)
+            continue
           }
-          attempt++
-          // Exponential backoff with jitter, capped, so retries do not hammer a
-          // struggling endpoint while still recovering quickly from a blip.
-          const delay = backoffDelayMs(attempt, RETRY_BASE_MS, RETRY_CAP_MS)
-          await new Promise((resolve) => setTimeout(resolve, delay))
+        }
+        let attempt = 0
+        for (;;) {
+          // Hedge only when it can help: a streaming request (so "first token"
+          // is observable), a remote provider (local Ollama cold-loads are slow
+          // but legitimate), and another candidate left to fall back to.
+          const hedge =
+            (opts.stream ?? false) &&
+            Boolean(onToken) &&
+            config.type !== "ollama" &&
+            index < candidates.length - 1
+          const attemptCtl = new AbortController()
+          const forwardAbort = () => attemptCtl.abort()
+          if (opts.signal?.aborted) attemptCtl.abort()
+          else opts.signal?.addEventListener("abort", forwardAbort, { once: true })
+          let firstTokenSeen = false
+          let deadlineHit = false
+          const deadline = hedge
+            ? setTimeout(() => {
+                if (!firstTokenSeen) {
+                  deadlineHit = true
+                  attemptCtl.abort()
+                }
+              }, FIRST_TOKEN_DEADLINE_MS)
+            : undefined
+          const attemptOnToken = onToken
+            ? (t: string) => {
+                firstTokenSeen = true
+                if (deadline) clearTimeout(deadline)
+                onToken(t)
+              }
+            : undefined
+          // Reasoning models stream "thinking" before any answer token; that is
+          // progress, not a stall, so it also disarms the hedge.
+          const onActivity = () => {
+            firstTokenSeen = true
+            if (deadline) clearTimeout(deadline)
+          }
+          try {
+            const output = await provider.generate({
+              prompt,
+              model,
+              stream: opts.stream ?? false,
+              images: opts.images,
+              onToken: attemptOnToken,
+              onActivity,
+              signal: attemptCtl.signal,
+              options: this.generationOptions(config, opts.temperatureCap),
+              kind: opts.kind,
+            })
+            // A different model just worked on this same provider, so the key
+            // and endpoint are fine: replace the dead configured models in saved
+            // settings so the next request (and the next launch) does not fail.
+            if (gone.length > 0 || blind.length > 0) {
+              this.healModels(config.id, gone, model, ctx.hasImage, blind)
+            }
+            return output
+          } catch (err: any) {
+            const message = err?.message ?? String(err)
+            if (opts.signal?.aborted) throw new Error("Request cancelled.")
+            // Never replay a partially-streamed response (would duplicate output).
+            if (streamedAny) throw err instanceof Error ? err : new Error(message)
+            if (deadlineHit) {
+              // Queued/slow, not broken: move on without marking it dead.
+              errors.push(
+                `${config.name}/${model}: no response within ${FIRST_TOKEN_DEADLINE_MS / 1000}s`
+              )
+              break
+            }
+
+            const kind = classifyModelError(message)
+            const label = `${config.name}/${model}: ${message}`
+            if (kind === "auth") {
+              // Every model on this provider will fail the same way.
+              errors.push(label)
+              nextProvider = true
+              break
+            }
+            if (kind === "gone") {
+              this.deadSet(config.id).add(model)
+              gone.push(model)
+              errors.push(label)
+              break // next model, immediately — retrying a retired model is pointless
+            }
+            if (kind === "unavailable") {
+              // Account-level: skip it for this session, but never heal it out of
+              // settings — the user may enable access to it later.
+              this.deadSet(config.id).add(model)
+              errors.push(label)
+              break
+            }
+            if (kind === "incompatible") {
+              errors.push(label)
+              break // this model cannot take this request; another one might
+            }
+
+            // ratelimit / transient / other: retry with backoff, then move on.
+            const budget =
+              kind === "transient" || kind === "ratelimit"
+                ? hasFallbackProvider
+                  ? Math.min(retries, 1)
+                  : Math.max(retries, MAX_TRANSIENT_RETRIES)
+                : retries
+            if (attempt >= budget) {
+              errors.push(label)
+              // A network-level outage affects every model on this provider;
+              // a rate limit is often per-model on free tiers, so keep trying.
+              if (kind === "transient") nextProvider = true
+              break
+            }
+            attempt++
+            await new Promise((resolve) =>
+              setTimeout(resolve, backoffDelayMs(attempt, RETRY_BASE_MS, RETRY_CAP_MS))
+            )
+          } finally {
+            if (deadline) clearTimeout(deadline)
+            opts.signal?.removeEventListener("abort", forwardAbort)
+          }
         }
       }
     }
     throw new Error(`All configured providers failed. ${errors.join(" | ")}`)
+  }
+
+  /** A small synthetic image with a known number, rendered once. */
+  private getProbeImage(): Promise<string | null> {
+    if (!this.probeImage) {
+      this.probeImage = (async () => {
+        try {
+          const sharp = require("sharp")
+          const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160"><rect width="100%" height="100%" fill="#ffffff"/><text x="40" y="112" font-size="96" font-family="Arial, Helvetica, sans-serif" font-weight="bold" fill="#000000">${VISION_PROBE_NUMBER}</text></svg>`
+          const jpeg: Buffer = await sharp(Buffer.from(svg)).jpeg({ quality: 90 }).toBuffer()
+          return jpeg.toString("base64")
+        } catch {
+          return null // no renderer available: fall back to trusting metadata
+        }
+      })()
+    }
+    return this.probeImage
+  }
+
+  /**
+   * Can this model actually read an image? Asks it to read a known number.
+   * Definitive answers are cached per session; inconclusive outcomes (network,
+   * auth, rate limit, timeout) are NOT cached and do not block the request.
+   */
+  private async verifyVision(
+    provider: LlmProvider,
+    config: AiProviderSettings,
+    model: string,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const key = `${config.id}::${model}`
+    const cached = this.visionVerdicts.get(key)
+    if (cached !== undefined) return cached
+    const image = await this.getProbeImage()
+    if (!image) return true
+
+    const ctl = new AbortController()
+    const forward = () => ctl.abort()
+    signal?.addEventListener("abort", forward, { once: true })
+    const timer = setTimeout(() => ctl.abort(), VISION_PROBE_TIMEOUT_MS)
+    try {
+      const reply = await provider.generate({
+        prompt: "What number is written in this image? Reply with only the digits.",
+        model,
+        stream: false,
+        images: [image],
+        signal: ctl.signal,
+        options: { ...this.generationOptions(config, 0), numPredict: 512 },
+      })
+      const sees = String(reply).replace(/[^0-9]/g, "").includes(VISION_PROBE_NUMBER)
+      this.visionVerdicts.set(key, sees)
+      if (isDev) console.log(`[LLMHelper] vision probe ${key}: ${sees ? "pass" : "FAIL"}`)
+      return sees
+    } catch (err: any) {
+      const kind = classifyModelError(err?.message ?? String(err))
+      if (kind === "incompatible" || kind === "gone" || kind === "unavailable") {
+        this.visionVerdicts.set(key, false)
+        return false
+      }
+      return true // inconclusive — let the real request decide
+    } finally {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", forward)
+    }
+  }
+
+  private deadSet(providerId: string): Set<string> {
+    let set = this.deadModels.get(providerId)
+    if (!set) {
+      set = new Set<string>()
+      this.deadModels.set(providerId, set)
+    }
+    return set
+  }
+
+  /** Persist replacements for configured models proven gone. See buildHealPatch. */
+  private healModels(
+    providerId: string,
+    gone: string[],
+    replacement: string,
+    hasImage: boolean,
+    blind: string[] = []
+  ) {
+    const config = this.settings.get("ai").providers[providerId]
+    if (!config) return
+    let patch: Record<string, unknown> | null = buildHealPatch(config, gone, replacement, hasImage)
+    // A model that cannot see is only removed from the VISION slot.
+    if (hasImage && blind.includes(config.visionModel) && replacement !== config.visionModel) {
+      patch = { ...(patch ?? {}), visionModel: replacement }
+    }
+    if (!patch) return
+    if (isDev) {
+      console.log(`[LLMHelper] healed ${providerId}: ${gone.join(", ")} -> ${replacement}`, patch)
+    }
+    this.settings.set({ ai: { providers: { [providerId]: patch } } })
   }
 
   // --- response cleaning / structuring ------------------------------------
@@ -430,7 +749,7 @@ export class LLMHelper {
     "reasoning": "Detailed explanation of the solution approach."
   }
 }\n\nIMPORTANT: Return ONLY the JSON object, without markdown formatting or code blocks. Ensure the code is syntactically correct and complete.`
-      const responseText = await this.generate(prompt, { stream: true, signal })
+      const responseText = await this.generate(prompt, { stream: true, signal, kind: "solution" })
       return this.validateAndStructureResponse(responseText, "solution_generation")
     } catch (error: any) {
       console.error("[LLMHelper] Error in generateSolution:", error)
@@ -470,6 +789,7 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
         images: base64Images,
         temperatureCap: 0.2,
         signal,
+        kind: "debug",
       })
       return this.validateAndStructureResponse(responseText, "solution_generation")
     } catch (error: any) {
@@ -479,15 +799,17 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
   }
 
   public async analyzeAudioFile(audioPath: string) {
+    this.requireSignIn()
     return AudioService.getInstance().transcribeFile(audioPath)
   }
 
   public async analyzeAudioFromBase64(data: string, mimeType: string) {
+    this.requireSignIn()
     return AudioService.getInstance().transcribeBase64(data, mimeType)
   }
 
   public async chat(message: string): Promise<string> {
-    return this.generate(message, { stream: false })
+    return this.generate(message, { stream: false, kind: "chat" })
   }
 
   public async chatStream(
@@ -495,9 +817,20 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
     onToken: (t: string) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    return this.generate(message, { stream: true, onToken, signal })
+    return this.generate(message, { stream: true, onToken, signal, kind: "chat" })
   }
 
+  /**
+   * Screenshot analysis in two stages: READ, then SOLVE.
+   *
+   * Measured on a real LeetCode screenshot: llama-3.2-90b-vision transcribed
+   * the problem correctly (title, statement, examples), yet when asked to solve
+   * it directly it confidently answered a DIFFERENT problem. Small vision
+   * models read well and reason badly. So the vision model only transcribes,
+   * and the strongest TEXT model (routed normally, can be another provider)
+   * reasons over the transcript. If either stage cannot be done, it degrades to
+   * the old single-stage path rather than failing.
+   */
   public async streamImageAnalysis(
     prompt: string,
     images: string[],
@@ -505,13 +838,71 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
     signal?: AbortSignal,
     temperature?: number
   ): Promise<string> {
-    return this.generate(prompt, {
-      stream: true,
-      images,
-      onToken,
-      signal,
-      temperatureCap: temperature ?? 0.0,
-    })
+    const temperatureCap = temperature ?? 0.0
+
+    // Signed in to Bitecodes: the server already does read-then-solve with the
+    // operator's providers, so send the screenshot once and let it. Doing the
+    // two stages here as well would double the round trips and the cost.
+    const first = this.providerSequence()[0]
+    let skipProviderIds: string[] = []
+    if (first?.type === "bitecodes" && SecretStore.getInstance().hasProviderApiKey(first.id)) {
+      let streamed = false
+      try {
+        return await this.generate(prompt, {
+          kind: "screenshot",
+          stream: true,
+          images,
+          signal,
+          temperatureCap,
+          providerId: first.id,
+          onToken: (t) => {
+            streamed = true
+            onToken(t)
+          },
+        })
+      } catch (err) {
+        if (signal?.aborted || streamed) throw err
+        // Bitecodes is down: fall back to the local providers, two-stage.
+        skipProviderIds = [first.id]
+      }
+    }
+
+    const direct = () =>
+      this.generate(prompt, { stream: true, images, onToken, signal, temperatureCap, skipProviderIds, kind: "screenshot" })
+
+    let transcript = ""
+    try {
+      transcript = await this.generate(SCREENSHOT_TRANSCRIBE_PROMPT, {
+        kind: "screenshot",
+        stream: false,
+        images,
+        signal,
+        temperatureCap: 0,
+        skipProviderIds,
+      })
+    } catch (err) {
+      if (signal?.aborted) throw err
+      throw err // no vision model could read it at all — same outcome as before
+    }
+    if (!isUsableTranscript(transcript)) return direct()
+
+    let streamed = false
+    try {
+      return await this.generate(buildSolvePrompt(prompt, transcript), {
+        kind: "screenshot",
+        stream: true,
+        onToken: (t) => {
+          streamed = true
+          onToken(t)
+        },
+        signal,
+        temperatureCap,
+        skipProviderIds,
+      })
+    } catch (err) {
+      if (signal?.aborted || streamed) throw err
+      return direct()
+    }
   }
 
   // --- model/provider management -----------------------------------------
@@ -606,9 +997,15 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
     if (providerId) {
       this.modelCache.delete(providerId)
       this.autoModels.delete(providerId)
+      this.deadModels.delete(providerId)
+      for (const key of [...this.visionVerdicts.keys()]) {
+        if (key.startsWith(`${providerId}::`)) this.visionVerdicts.delete(key)
+      }
       return
     }
     this.modelCache.clear()
+    this.deadModels.clear()
+    this.visionVerdicts.clear()
     this.autoModels.clear()
   }
 
@@ -627,10 +1024,34 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
     if (!model) await this.initialize()
   }
 
-  public async testConnection(providerId?: string): Promise<{ success: boolean; error?: string }> {
+  public async testConnection(
+    providerId?: string
+  ): Promise<{ success: boolean; error?: string; warning?: string }> {
     try {
       const health = await this.getProviderHealth(providerId)
       if (!health.ok) return { success: false, error: health.error }
+      // Connectivity alone is not enough: a reachable provider whose configured
+      // models were retired still fails every request. Cross-check the slots
+      // against the live catalog (no billable call) and say so plainly.
+      const target = providerId
+        ? this.settings.get("ai").providers[providerId]
+        : this.activeProvider
+      let warning: string | undefined
+      if (target && target.type !== "ollama") {
+        const models = await this.discoverModels(target.id).catch((): ModelInfo[] => [])
+        if (models.length > 0) {
+          const listed = new Set(models.map((m) => m.name))
+          const missing = [
+            ...new Set(
+              [target.visionModel, target.highModel, target.lowModel, ...(target.fallbackModels ?? [])]
+                .filter((id) => id && !listed.has(id))
+            ),
+          ]
+          if (missing.length > 0) {
+            warning = `Connected, but ${target.name} does not currently offer: ${missing.join(", ")}. Requests will fall back automatically; pick a listed model to avoid the detour.`
+          }
+        }
+      }
       // Only warm up a local (Ollama) model with a probe generation. For a remote
       // paid provider the health check (models fetch) already proves connectivity
       // and auth; a probe would be a billable completion on every screenshot.
@@ -644,7 +1065,7 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
           temperatureCap: 0,
         })
       }
-      return { success: true }
+      return warning ? { success: true, warning } : { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }
     }

@@ -1,3 +1,5 @@
+import { isChatModel } from "./modelFit"
+
 // Pure, dependency-free parsing helpers for the local LLM path. Extracted from
 // LLMHelper so they can be unit-tested without constructing the class (whose
 // constructor performs network I/O). No Electron imports here.
@@ -30,6 +32,12 @@ export function cleanJsonResponse(text: string): string {
  */
 export function visionFromModality(rawEntry: unknown): boolean | undefined {
   if (typeof rawEntry !== "object" || rawEntry === null) return undefined
+  // TokenVisor-style gateways (Sharon AI) publish a flat capabilities list,
+  // e.g. ["chat", "tool", "reasoning", "image"].
+  const caps = (rawEntry as { capabilities?: unknown }).capabilities
+  if (Array.isArray(caps) && caps.every((c) => typeof c === "string")) {
+    return caps.some((c) => /^(image|vision|multimodal)$/i.test(c))
+  }
   const arch = (rawEntry as { architecture?: unknown }).architecture
   if (typeof arch !== "object" || arch === null) return undefined
   const mods = (arch as { input_modalities?: unknown }).input_modalities
@@ -41,14 +49,28 @@ export function visionFromModality(rawEntry: unknown): boolean | undefined {
   return undefined
 }
 
-/** Name-based vision-capability guess, used when /api/show is unavailable. */
+/**
+ * Name-based vision-capability guess, used when a provider's catalog carries no
+ * modality metadata (NVIDIA NIM, most self-hosted gateways). Two layers:
+ *
+ *  1. Generic multimodal tokens that appear across providers' naming
+ *     ("vision", "multimodal", "vlm", a "-vl" suffix). These catch hyphenated
+ *     NVIDIA ids like "meta/llama-3.2-90b-vision-instruct" that an exact-family
+ *     list kept missing.
+ *  2. Known multimodal families whose names do NOT contain a vision token —
+ *     Llama 4 (maverick/scout), Pixtral, LLaVA, InternVL, etc.
+ *
+ * Deliberately excludes a bare "image" token so image-GENERATION models (which
+ * take text and emit an image) are not mistaken for vision-INPUT chat models.
+ */
 export function heuristicVision(modelName: string): boolean {
+  const m = modelName.toLowerCase()
+  // An embedding/retriever that ACCEPTS images ("...-vlm-embed") is not a
+  // vision chat model; never offer one for screenshot analysis.
+  if (!isChatModel(m)) return false
+  if (/vision|multimodal|vlm|-vl\b|\bvl-/.test(m)) return true
   const known = [
-    "llama3.2-vision",
     "llava",
-    "llava-llama3",
-    "llava-phi3",
-    "gemma3",
     "bakllava",
     "moondream",
     "cogvlm",
@@ -56,8 +78,22 @@ export function heuristicVision(modelName: string): boolean {
     "qwen2-vl",
     "qwen2.5-vl",
     "qwen2.5vl",
+    "qwen2vl",
+    "gemma3",
+    "gemma-3",
+    "pixtral",
+    "llama-4",
+    "llama4",
+    "maverick",
+    "scout",
+    "internvl",
+    "vila",
+    "neva",
+    "kosmos",
+    "paligemma",
+    "molmo",
+    "aria",
   ]
-  const m = modelName.toLowerCase()
   return known.some((v) => m.includes(v))
 }
 
@@ -76,4 +112,25 @@ export function takeLines(buffer: string): { lines: string[]; rest: string } {
     if (line) lines.push(line)
   }
   return { lines, rest: buffer }
+}
+
+/**
+ * Whether a raw /models entry is a usable, current chat model according to the
+ * provider's own metadata. Gateways like TokenVisor (Sharon AI) publish a
+ * `type` ("llm", "embedding", ...) and an `expiration_date`; an expired entry
+ * would fail with 410 and a non-LLM entry cannot answer a chat completion, so
+ * both are dropped at discovery time. Entries without such metadata (OpenAI,
+ * OpenRouter, NVIDIA) are kept — name-based filtering covers those.
+ */
+export function isUsableCatalogEntry(rawEntry: unknown, now: number = Date.now()): boolean {
+  if (typeof rawEntry !== "object" || rawEntry === null) return true
+  const e = rawEntry as { type?: unknown; expiration_date?: unknown }
+  if (typeof e.type === "string" && !/^(llm|vlm|chat|model|text-generation)$/i.test(e.type)) {
+    return false
+  }
+  if (typeof e.expiration_date === "string" && e.expiration_date) {
+    const at = Date.parse(e.expiration_date)
+    if (Number.isFinite(at) && at <= now) return false
+  }
+  return true
 }

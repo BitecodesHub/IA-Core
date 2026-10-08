@@ -1,11 +1,15 @@
 import React, { useState } from "react"
 import { RefreshCw, ShieldCheck, Wifi } from "lucide-react"
 import type { AiProviderSettings } from "../../types/settings"
+import { PINNED_PROVIDER_ENDPOINTS } from "../../../electron/config/schema"
 import { useProviderModels } from "./useProviderModels"
 import { matchesSetting } from "../../lib/modelOptions"
 import ModelSlots from "./ModelSlots"
+import BitecodesAccount from "./BitecodesAccount"
 import FallbackChainEditor from "./FallbackChainEditor"
 import TextField from "../ui/TextField"
+import Combobox from "../ui/Combobox"
+import { BEDROCK_REGIONS, bedrockRuntimeEndpoint } from "../../../electron/llm/bedrockRegions"
 import NumberField from "../ui/NumberField"
 
 interface ProviderSectionProps {
@@ -15,6 +19,22 @@ interface ProviderSectionProps {
   search?: string
   onActivate: () => void
   onUpdate: (patch: Partial<AiProviderSettings>) => void
+}
+
+/**
+ * Where to get an API key, keyed by provider id. Plain text (not a link): the
+ * overlay denies in-app navigation and new windows, so a clickable <a> would do
+ * nothing — the user copies the URL into a normal browser.
+ */
+const PROVIDER_KEY_HELP: Record<string, string> = {
+  nvidia: "Free tier — create a key at build.nvidia.com (format: nvapi-…).",
+  openai: "Create a key at platform.openai.com/api-keys.",
+  gemini: "Create a key at aistudio.google.com/apikey.",
+  groq: "Free tier — create a key at console.groq.com/keys.",
+  openrouter: "Create a key at openrouter.ai/keys.",
+  bedrock: "Bedrock API key (long-term keys start ABSK…) — AWS console → Amazon Bedrock → API keys. Enable model access for your region first.",
+  vertex: "Vertex AI Express API key — console.cloud.google.com → Vertex AI → API keys. Served from Sydney.",
+  sharonai: "Personal access token (tv-pat-…) from inference.sharonai.cloud. No vision model on most plans — add NVIDIA as a fallback provider for screenshots.",
 }
 
 const PARAMS: {
@@ -48,11 +68,15 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
   )
   const [apiKeyDraft, setApiKeyDraft] = useState("")
   const [keyMsg, setKeyMsg] = useState<string | null>(null)
-  const [testMsg, setTestMsg] = useState<{ kind: "ok" | "err" | "testing"; msg?: string } | null>(
-    null
-  )
+  const [testMsg, setTestMsg] = useState<{
+    kind: "ok" | "warn" | "err" | "testing"
+    msg?: string
+  } | null>(null)
 
-  const pinnedEndpoint = provider.id === "openrouter"
+  // Managed cloud endpoints are pinned in the schema (SSRF hardening); the UI
+  // must read that map rather than hard-coding one provider id, or newly added
+  // providers render an editable field whose edits are silently discarded.
+  const pinnedEndpoint = Boolean(PINNED_PROVIDER_ENDPOINTS[provider.id])
   const loading = status === "loading"
   const params = PARAMS.filter((p) => matchesSetting(p.label, search))
 
@@ -71,7 +95,13 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
     setTestMsg({ kind: "testing" })
     try {
       const res = await window.electronAPI.testLlmConnection(provider.id)
-      setTestMsg(res.success ? { kind: "ok", msg: "Connected." } : { kind: "err", msg: res.error })
+      setTestMsg(
+        !res.success
+          ? { kind: "err", msg: res.error }
+          : res.warning
+            ? { kind: "warn", msg: res.warning }
+            : { kind: "ok", msg: "Connected — configured models are available." }
+      )
     } catch (err: any) {
       setTestMsg({ kind: "err", msg: err?.message ?? "Connection failed." })
     }
@@ -81,6 +111,7 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
   const statusLine = (() => {
     if (testMsg?.kind === "testing") return { cls: "text-white/60", text: "Testing…" }
     if (testMsg?.kind === "ok") return { cls: "text-green-400", text: testMsg.msg }
+    if (testMsg?.kind === "warn") return { cls: "text-amber-300", text: testMsg.msg }
     if (testMsg?.kind === "err") return { cls: "text-red-400", text: testMsg.msg }
     if (loading) return { cls: "text-white/60", text: "Discovering models…" }
     if (status === "error")
@@ -95,6 +126,40 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
       return { cls: "text-white/50", text: "Click Discover to load models." }
     return { cls: "text-white/50", text: "" }
   })()
+
+  // Bitecodes: account only. No endpoint, key, model slots or sampling knobs —
+  // the server owns those and the user is never shown which model answers.
+  if (provider.type === "bitecodes") {
+    return (
+      <section
+        className={`space-y-2 border rounded-md p-2.5 ${isActive ? "border-white/50" : "border-white/15"}`}
+        aria-label={`${provider.name} settings`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Bitecodes model</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+                isActive ? "border-green-400 text-green-400" : "border-white/30 text-white/70"
+              }`}
+            >
+              {isActive ? "Active" : "Inactive"}
+            </span>
+          </div>
+          {!isActive && (
+            <button
+              type="button"
+              onClick={onActivate}
+              className="text-[10px] px-2 py-0.5 rounded border border-white/40 hover:bg-white/10"
+            >
+              Use this
+            </button>
+          )}
+        </div>
+        <BitecodesAccount />
+      </section>
+    )
+  }
 
   return (
     <section
@@ -136,22 +201,44 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
         </div>
       </div>
 
-      <TextField
-        label="Endpoint"
-        value={provider.endpoint}
-        onCommit={(v) => onUpdate({ endpoint: v })}
-        mono
-        readOnly={pinnedEndpoint}
-        hint={
-          pinnedEndpoint
-            ? "OpenRouter endpoint is fixed for security."
-            : provider.type === "ollama"
-              ? "Loopback/private hosts only."
-              : "OpenAI-compatible base URL."
-        }
-      />
+      {provider.type === "bedrock-converse" ? (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-white/70">Region</span>
+          {/* Region picker rather than a free URL: a mistyped endpoint is rejected
+              by the settings guard and would silently fall back to Sydney. */}
+          <Combobox
+            ariaLabel="Bedrock region"
+            value={provider.endpoint}
+            onChange={(endpoint) => onUpdate({ endpoint })}
+            options={BEDROCK_REGIONS.map((r) => ({
+              kind: "model" as const,
+              value: bedrockRuntimeEndpoint(r.code),
+              label: r.label,
+              detail: r.code,
+            }))}
+            hint="Type to search regions by name or code."
+            emptyText="No matching region"
+            className="w-56"
+          />
+        </div>
+      ) : (
+        <TextField
+          label="Endpoint"
+          value={provider.endpoint}
+          onCommit={(v) => onUpdate({ endpoint: v })}
+          mono
+          readOnly={pinnedEndpoint}
+          hint={
+            pinnedEndpoint
+              ? `${provider.name} endpoint is fixed for security.`
+              : provider.type === "ollama"
+                ? "Loopback/private hosts only."
+                : "OpenAI-compatible base URL."
+          }
+        />
+      )}
 
-      {provider.type === "openai-compatible" && (
+      {provider.type !== "ollama" && (
         <div className="space-y-2 border border-white/10 rounded-md p-2">
           <label className="flex items-center justify-between gap-2 text-xs">
             <span className="text-white/70">Require API key</span>
@@ -192,6 +279,9 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
                 : "OS secure storage available"
               : "Secure storage unavailable"}
           </div>
+          {PROVIDER_KEY_HELP[provider.id] && (
+            <div className="text-[10px] text-white/50">{PROVIDER_KEY_HELP[provider.id]}</div>
+          )}
           {keyMsg && <div className="text-[10px] text-amber-300">{keyMsg}</div>}
         </div>
       )}

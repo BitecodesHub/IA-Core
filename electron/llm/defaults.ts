@@ -24,6 +24,31 @@ export const RECOMMENDED_MODELS: Record<string, RecommendedModels> = {
     high: "anthropic/claude-sonnet-5",
     vision: "anthropic/claude-sonnet-5",
   },
+  // Re-verified 2026-10-06 on the live NVIDIA catalog (free tier): deepseek-v4.1-
+  // flash, kimi-k3 and glm-5.3 never answered within 40s; mistral-large-2 and
+  // nemotron-ultra-253b returned 404; nemotron-3-super reasoned past a 16k
+  // budget on a hard problem. gpt-oss-20b answered and got the examples right,
+  // so it is the default — NVIDIA works best as a FALLBACK provider for text.
+  // Vision: llama-3.2-90b is the only NVIDIA model that transcribed a full
+  // LeetCode screenshot correctly (11b dropped the key details). Stale ids are
+  // safe: runtime fallback + self-healing replace them.
+  nvidia: {
+    low: "openai/gpt-oss-20b",
+    high: "openai/gpt-oss-20b",
+    vision: "meta/llama-3.2-90b-vision-instruct",
+  },
+  // Sharon AI has no model that can actually read images (all fail the vision
+  // probe), so screenshots fall through to the next provider automatically.
+  vertex: {
+    low: "gemini-2.5-flash",
+    high: "gemini-2.5-flash",
+    vision: "gemini-2.5-flash",
+  },
+  sharonai: {
+    low: "deepseek-ai/DeepSeek-V4-Flash-0731",
+    high: "deepseek-ai/DeepSeek-V4-Flash-0731",
+    vision: "",
+  },
 }
 
 /**
