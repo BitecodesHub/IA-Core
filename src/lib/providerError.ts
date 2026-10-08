@@ -40,9 +40,15 @@ function clip(text: string): string {
  * Format a provider error for display. Reports the FIRST failure (the model the
  * user actually configured), plus how many fallbacks were also tried.
  */
+/** What users see when the hosted model cannot answer (no internals). */
+export const BITECODES_UNAVAILABLE =
+  "The Bitecodes model is temporarily unavailable. Please try again in a moment."
+
 export function formatProviderError(raw: unknown): string {
   const text = String(raw ?? "").trim()
   if (!text) return "Couldn't complete that. Try again."
+  // Sign-in / update gates: already written for the user, show as-is.
+  if (/^(Sign in with Bitecodes|This version of Notes)/.test(text)) return clip(text)
 
   const body = text.replace(/^All configured providers failed\.\s*/i, "")
   const failures = body.split(/\s\|\s/).filter((f) => f.trim())
@@ -54,6 +60,13 @@ export function formatProviderError(raw: unknown): string {
 
   const [, provider, model, status, rest] = m
   const reason = detailFromBody(rest) ?? rest.trim()
+  // The hosted model never reveals providers, models, status codes or how many
+  // fallbacks ran. A daily-limit message from the server is already readable.
+  if (/^bitecodes$/i.test(provider.trim()) || /^bitecodes$/i.test(model)) {
+    if (/today's limit|daily capacity|does not include/i.test(reason)) return clip(reason)
+    if (/sign in/i.test(reason) || status === "401") return "Signed out — sign in with Bitecodes again."
+    return BITECODES_UNAVAILABLE
+  }
   const more = failures.length > 1 ? ` (+${failures.length - 1} fallback${failures.length > 2 ? "s" : ""} also failed)` : ""
   const code = status ? ` [${status}]` : ""
   return clip(`${provider} · ${model}${code}: ${reason || "request failed"}${more}`)

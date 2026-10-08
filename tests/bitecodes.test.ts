@@ -179,3 +179,25 @@ describe("daily limits", () => {
     await expect(p.generate(req())).rejects.toThrow(/429: slow down/)
   })
 })
+
+import { formatProviderError, BITECODES_UNAVAILABLE } from "../src/lib/providerError"
+
+describe("hosted-model error messages hide internals", () => {
+  it("never shows providers, models, codes or fallback counts", () => {
+    const raw =
+      "All configured providers failed. Bitecodes/bitecodes: Provider API error 503: The Bitecodes model is not available right now. | Sharon AI/deepseek: Provider API error 401: bad key | Vertex/gemini: 403 | NVIDIA/x: 500"
+    const out = formatProviderError(raw)
+    expect(out).toBe(BITECODES_UNAVAILABLE)
+    expect(out).not.toMatch(/fallback|503|Sharon|Vertex|NVIDIA|API key/i)
+  })
+  it("passes daily-limit and sign-in messages through", () => {
+    expect(
+      formatProviderError("Bitecodes/bitecodes: Provider API error 403: You have reached today's limit for the Bitecodes model. It resets at 00:00 UTC.")
+    ).toMatch(/^You have reached today's limit/)
+    expect(formatProviderError("Sign in with Bitecodes to use Notes.")).toBe("Sign in with Bitecodes to use Notes.")
+    expect(formatProviderError("Bitecodes/bitecodes: Provider API error 401: Token revoked")).toMatch(/sign in with Bitecodes again/)
+  })
+  it("still details errors for the user's own providers", () => {
+    expect(formatProviderError("NVIDIA NIM/meta/llama: Provider API error 410: gone")).toMatch(/NVIDIA NIM/)
+  })
+})

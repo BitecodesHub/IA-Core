@@ -98,7 +98,7 @@ export class BitecodesProvider implements LlmProvider {
           providerId: this.config.id,
           ok: false,
           checkedAt,
-          error: "Signed in, but the Bitecodes model is switched off on the server.",
+          error: "The Bitecodes model is temporarily unavailable. Please try again in a moment.",
         }
       }
       return { providerId: this.config.id, ok: true, checkedAt, latencyMs: Date.now() - started, modelCount: 1 }

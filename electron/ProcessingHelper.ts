@@ -214,7 +214,10 @@ export class ProcessingHelper {
       // below has an idle timeout and robust retries and frequently succeeds on a
       // slow connection where this quick probe did not — so we proceed instead of
       // blocking the answer on a flaky health check.
-      const connectionTest = await this.llmHelper.testConnection()
+      // Skipped for the Bitecodes model: its fallbacks are decided per request,
+      // and a probe that fails would block an answer a fallback could give.
+      const hosted = this.llmHelper.getCurrentProvider() === "bitecodes"
+      const connectionTest = hosted ? { success: true as const } : await this.llmHelper.testConnection()
       if (!connectionTest.success) {
         const reason = connectionTest.error ?? "unknown error"
         if (!isTransientError(reason)) {
@@ -238,7 +241,14 @@ export class ProcessingHelper {
       // must not tell the user to fix Ollama, and vice versa.
       const usingOllama = this.llmHelper.isUsingOllama()
       let errorMessage = error.message
-      if (error.message.includes("timed out")) {
+      if (this.llmHelper.getCurrentProvider() === "bitecodes") {
+        // Hosted model: no provider names, keys or settings advice.
+        errorMessage = /^(Sign in with Bitecodes|This version of Notes)/.test(error.message)
+          ? error.message
+          : (error.message.match(
+              /(You have reached today's limit[^|]*|The Bitecodes model has reached its daily capacity[^|]*|Your Bitecodes account does not include[^|]*)/
+            )?.[1]?.trim() ?? "The Bitecodes model is temporarily unavailable. Please try again in a moment.")
+      } else if (error.message.includes("timed out")) {
         errorMessage = usingOllama
           ? "Image analysis is taking too long. This might be because:\n• The model is still loading\n• The image is too complex\n• Ollama is not responding\n\nTry again or check your Ollama installation."
           : "Image analysis timed out. Check your network connection and try again."
