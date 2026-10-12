@@ -78,6 +78,9 @@ function isMachO(file) {
 
 exports.default = async function adhocSign(context) {
   if (context.electronPlatformName !== "darwin") return
+  // Universal builds: the x64/arm64 halves are merged afterwards and must be
+  // byte-identical outside their binaries, so only the merged app is signed.
+  if (/-(x64|arm64)-temp$/.test(context.appOutDir)) return
   const app = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
   const entitlements = path.join(context.packager.projectDir, "assets", "entitlements.mac.plist")
   IDENTITY = stableIdentity()

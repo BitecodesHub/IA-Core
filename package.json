@@ -1,6 +1,6 @@
 {
   "name": "interview-coder",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "main": "./dist-electron/main.js",
   "scripts": {
     "clean": "rimraf dist dist-electron",
@@ -18,10 +18,12 @@
     "electron:dev": "npm run electron:compile && concurrently -k -s first -n vite,electron \"vite\" \"wait-on tcp:127.0.0.1:5180 && npm run electron:run\"",
     "electron:build": "tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "app:dev": "npm run electron:dev",
-    "app:build": "npm run build && electron-builder",
+    "app:build": "npm run build && electron-builder --config electron-builder.config.cjs",
     "watch": "tsc -p electron/tsconfig.json --watch",
     "start": "npm run app:dev",
-    "dist": "npm run app:build"
+    "dist": "npm run app:build",
+    "mac:universal-deps": "npm install --no-save --force @img/sharp-darwin-x64@0.33.5 @img/sharp-libvips-darwin-x64@1.0.4",
+    "dist:mac": "npm run mac:universal-deps && npm run build && electron-builder --config electron-builder.config.cjs --mac --publish never"
   },
   "build": {
     "appId": "com.notes.desktop",
@@ -73,8 +75,7 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
-            "arm64"
+            "universal"
           ]
         }
       ],
@@ -119,7 +120,9 @@
         "!node_modules/@img/sharp-libvips-linux*/**",
         "!node_modules/@img/sharp-wasm32/**"
       ],
-      "identity": null
+      "identity": null,
+      "mergeASARs": true,
+      "x64ArchFiles": "**/node_modules/@img/**"
     },
     "win": {
       "target": [

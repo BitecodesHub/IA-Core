@@ -28,14 +28,24 @@ jobs:
       # Manual runs: build only, artifacts downloadable from the run page.
       - name: Package (no publish)
         if: github.ref_type != 'tag'
-        run: npx electron-builder --win --publish never
+        run: npx electron-builder --config electron-builder.config.cjs --win --publish never
 
       # Tag builds (v*): package and attach the installer to a GitHub Release.
       - name: Package and publish release
         if: github.ref_type == 'tag'
-        run: npx electron-builder --win --publish always
+        run: npx electron-builder --config electron-builder.config.cjs --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Native modules must be the Windows build: fail loudly if sharp's
+      # win32 binary did not make it into the package (it silently falls back
+      # to a slower resizer otherwise).
+      - name: Verify native image library is packaged
+        shell: pwsh
+        run: |
+          $hit = Get-ChildItem -Recurse "release\win-unpacked\resources\app.asar.unpacked\node_modules\@img" -Filter "sharp-win32-x64.node" -ErrorAction SilentlyContinue
+          if (-not $hit) { throw "sharp-win32-x64.node missing from the package" }
+          "found: $($hit.FullName)"
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
