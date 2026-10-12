@@ -28,12 +28,12 @@ jobs:
       # Manual runs: build only, artifacts downloadable from the run page.
       - name: Package (no publish)
         if: github.ref_type != 'tag'
-        run: npx electron-builder --config electron-builder.config.cjs --win --publish never
+        run: npx electron-builder --config electron-builder.config.cjs --win --x64 --arm64 --publish never
 
       # Tag builds (v*): package and attach the installer to a GitHub Release.
       - name: Package and publish release
         if: github.ref_type == 'tag'
-        run: npx electron-builder --config electron-builder.config.cjs --win --publish always
+        run: npx electron-builder --config electron-builder.config.cjs --win --x64 --arm64 --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
