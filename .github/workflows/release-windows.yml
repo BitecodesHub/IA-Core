@@ -47,6 +47,17 @@ jobs:
           if (-not $hit) { throw "sharp-win32-x64.node missing from the package" }
           "found: $($hit.FullName)"
 
+      # The one file users download: the combined x64 + ARM installer.
+      - name: Upload combined installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-setup
+          path: |
+            release/Notes-Setup-*.exe
+            !release/*-x64.exe
+            !release/*-arm64.exe
+          if-no-files-found: error
+
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
