@@ -201,3 +201,28 @@ describe("hosted-model error messages hide internals", () => {
     expect(formatProviderError("NVIDIA NIM/meta/llama: Provider API error 410: gone")).toMatch(/NVIDIA NIM/)
   })
 })
+
+import { transcribeWithBitecodes } from "../electron/llm/bitecodes"
+
+describe("voice transcription via Bitecodes", () => {
+  it("posts the recording and returns the transcript", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true, text: "hello" }), { status: 200 }))
+    const text = await transcribeWithBitecodes(BITECODES_DEFAULT_ENDPOINT, "bcd_x", "QUJD", "audio/webm;codecs=opus", {
+      fetchImpl: fetchImpl as any,
+      client: "Notes/1.8.4 (win32; x64)",
+    })
+    expect(text).toBe("hello")
+    const [url, init] = fetchImpl.mock.calls[0] as any
+    expect(url).toBe("https://www.bitecodes.com/api/v1/desktop/transcribe")
+    expect(init.headers.Authorization).toBe("Bearer bcd_x")
+    expect(JSON.parse(init.body)).toEqual({ audio: "QUJD", mimeType: "audio/webm;codecs=opus" })
+  })
+  it("surfaces the server's message and signals revocation", async () => {
+    const onUnauthorized = vi.fn()
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ message: "Sign in to Bitecodes again." }), { status: 401 }))
+    await expect(
+      transcribeWithBitecodes(BITECODES_DEFAULT_ENDPOINT, "t", "QUJD", "audio/webm", { fetchImpl: fetchImpl as any, onUnauthorized })
+    ).rejects.toThrow("Sign in to Bitecodes again.")
+    expect(onUnauthorized).toHaveBeenCalled()
+  })
+})

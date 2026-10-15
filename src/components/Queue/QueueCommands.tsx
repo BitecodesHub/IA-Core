@@ -59,8 +59,10 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             try {
               const result = await window.electronAPI.analyzeAudioFromBase64(base64Data, blob.type)
               setAudioResult(result.text)
-            } catch {
-              setAudioResult("Audio analysis failed.")
+            } catch (err: any) {
+              // IPC wraps main-process errors: "Error invoking remote method '…': Error: <reason>".
+              const reason = String(err?.message ?? "").replace(/^Error invoking remote method '[^']+': (Error: )?/, "")
+              setAudioResult(reason || "Voice transcription failed. Please try again.")
             }
           }
           reader.readAsDataURL(blob)

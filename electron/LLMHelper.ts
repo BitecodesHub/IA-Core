@@ -1,4 +1,5 @@
 import fs from "fs"
+import path from "path"
 import { SettingsService } from "./config/SettingsService"
 import { SecretStore } from "./config/SecretStore"
 import { AudioService } from "./audio/AudioService"
@@ -10,7 +11,7 @@ import { isTransientError, backoffDelayMs } from "./llm/retry"
 import { recommendedModels } from "./llm/defaults"
 import { VertexGeminiProvider } from "./llm/vertex"
 import { BedrockProvider } from "./llm/bedrock"
-import { BitecodesProvider, LOGIN_REQUIRED } from "./llm/bitecodes"
+import { BitecodesProvider, LOGIN_REQUIRED, transcribeWithBitecodes } from "./llm/bitecodes"
 import { BitecodesAuth, notesClient } from "./bitecodesAuth"
 import { UpdateChecker } from "./updateCheck"
 import { buildHealPatch, classifyModelError, planCandidateModels } from "./llm/modelFit"
@@ -804,12 +805,39 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
 
   public async analyzeAudioFile(audioPath: string) {
     this.requireSignIn()
-    return AudioService.getInstance().transcribeFile(audioPath)
+    const data = (await fs.promises.readFile(audioPath)).toString("base64")
+    const ext = path.extname(audioPath).toLowerCase()
+    const mime = ext === ".wav" ? "audio/wav" : ext === ".mp3" ? "audio/mpeg" : ext === ".m4a" ? "audio/mp4" : ext === ".ogg" ? "audio/ogg" : "audio/webm"
+    return this.analyzeAudioFromBase64(data, mime)
   }
 
+  /**
+   * Voice → text. Signed-in users are transcribed by Bitecodes (server-side
+   * Whisper), which needs nothing installed. Local whisper.cpp is only a
+   * fallback for when Bitecodes cannot be reached; it needs whisper-cli and
+   * ffmpeg, which normal installs do not have, so its error is not surfaced.
+   */
   public async analyzeAudioFromBase64(data: string, mimeType: string) {
     this.requireSignIn()
-    return AudioService.getInstance().transcribeBase64(data, mimeType)
+    const config = this.settings.get("ai").providers.bitecodes
+    const token = SecretStore.getInstance().getProviderApiKey("bitecodes")
+    let hostedError: Error | null = null
+    if (config && token) {
+      try {
+        const text = await transcribeWithBitecodes(config.endpoint, token, data, mimeType, {
+          client: notesClient(),
+          onUnauthorized: () => BitecodesAuth.getInstance().handleRevoked(),
+        })
+        return { text, timestamp: Date.now() }
+      } catch (error: any) {
+        hostedError = error instanceof Error ? error : new Error(String(error))
+      }
+    }
+    try {
+      return await AudioService.getInstance().transcribeBase64(data, mimeType)
+    } catch {
+      throw hostedError ?? new Error("Voice transcription is not available right now.")
+    }
   }
 
   public async chat(message: string): Promise<string> {

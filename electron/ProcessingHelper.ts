@@ -2,7 +2,6 @@
 
 import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
-import { AudioService } from "./audio/AudioService"
 import { SettingsService } from "./config/SettingsService"
 import { isTransientError } from "./llm/retry"
 import { toResizedJpeg } from "./image/resize"
@@ -137,17 +136,17 @@ export class ProcessingHelper {
   }
 
   public async processAudioBase64(data: string, mimeType: string) {
-    return this.handleAudio(() => AudioService.getInstance().transcribeBase64(data, mimeType))
+    return this.handleAudio(() => this.llmHelper.analyzeAudioFromBase64(data, mimeType))
   }
 
   public async processAudioFile(filePath: string) {
-    return this.handleAudio(() => AudioService.getInstance().transcribeFile(filePath))
+    return this.handleAudio(() => this.llmHelper.analyzeAudioFile(filePath))
   }
 
   /**
-   * Local transcription, then (optionally) a local Ollama analysis of the
-   * transcript. Fully offline; degrades to a clear message if the STT engine or
-   * a model is unavailable.
+   * Transcription (Bitecodes server-side Whisper, local whisper.cpp as a
+   * fallback), then an analysis of the transcript by the active model.
+   * Degrades to a clear message if either step is unavailable.
    */
   private async handleAudio(
     run: () => Promise<{ text: string; timestamp: number }>

@@ -333,3 +333,33 @@ export function isAllowedBitecodesEndpoint(value: string): boolean {
     return false
   }
 }
+
+/**
+ * Speech-to-text through the user's Bitecodes account (server-side Whisper).
+ * Works on every computer without whisper.cpp, ffmpeg or a model download.
+ */
+export async function transcribeWithBitecodes(
+  endpoint: string,
+  token: string,
+  audioBase64: string,
+  mimeType: string,
+  opts: { fetchImpl?: typeof fetch; client?: string; onUnauthorized?: () => void } = {}
+): Promise<string> {
+  const fetchImpl = opts.fetchImpl ?? ((...a) => fetch(...a))
+  const res = await fetchImpl(`${base(endpoint)}/api/v1/desktop/transcribe`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...clientHeader(opts.client),
+    },
+    body: JSON.stringify({ audio: audioBase64, mimeType }),
+    signal: AbortSignal.timeout(120_000),
+  })
+  const d: any = await res.json().catch(() => ({}))
+  if (res.status === 401) opts.onUnauthorized?.()
+  if (!res.ok || typeof d?.text !== "string") {
+    throw new Error(String(d?.message ?? `Transcription failed (HTTP ${res.status}).`))
+  }
+  return d.text
+}
