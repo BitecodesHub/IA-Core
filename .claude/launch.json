@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bitecodes-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "/Users/mac/Desktop/Projects/Bitecodes-SAAS", "dev"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}
