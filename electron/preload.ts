@@ -13,6 +13,7 @@ import type {
 } from "./shortcuts/types"
 import type { AcceleratorValidation } from "./shortcuts/validation"
 import type { PermissionReport } from "./permissions"
+import type { SettingsPersistenceStatus } from "./config/SettingsService"
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
 
@@ -21,9 +22,6 @@ export interface ChatStreamHandlers {
   onDone?: (full: string) => void
   onError?: (error: string) => void
 }
-
-// Monotonic per-request id for streaming chat channels.
-let chatSeq = 0
 
 // Types for the exposed Electron API
 interface ElectronAPI {
@@ -39,7 +37,7 @@ interface ElectronAPI {
   onSolutionStart: (callback: () => void) => () => void
   onDebugStart: (callback: () => void) => () => void
   onDebugSuccess: (callback: (data: any) => void) => () => void
-  onSolutionError: (callback: (error: string) => void) => () => void
+  onSolutionError: (callback: (error: string, requestId?: string) => void) => () => void
   onProcessingNoScreenshots: (callback: () => void) => () => void
   onProblemExtracted: (callback: (data: any) => void) => () => void
   onSolutionSuccess: (callback: (data: any) => void) => () => void
@@ -97,9 +95,10 @@ interface ElectronAPI {
     providerId?: string
   ) => Promise<{ success: boolean; error?: string; warning?: string }>
   processScreenshotWithChoice: (
-    analysisType: "analyze" | "answer"
+    analysisType: "analyze" | "answer",
+    requestId: string
   ) => Promise<{ success: boolean; error?: string }>
-  cancelScreenshotProcessing: () => Promise<{ success: boolean; error?: string }>
+  cancelScreenshotProcessing: (requestId: string) => Promise<{ success: boolean; error?: string }>
   onScreenshotError: (
     callback: (data: { message: string; code?: string; actionable?: boolean }) => void
   ) => () => void
@@ -111,6 +110,9 @@ interface ElectronAPI {
   openScreenRecordingSettings: () => Promise<{ ok: boolean }>
 
   // Settings
+  getSettingsPersistenceStatus: () => Promise<SettingsPersistenceStatus>
+  retrySettingsPersistence: () => Promise<SettingsPersistenceStatus>
+  onSettingsPersistenceChanged: (callback: (status: SettingsPersistenceStatus) => void) => () => void
   getSettings: () => Promise<AppSettings>
   setSettings: (patch: DeepPartial<AppSettings>) => Promise<AppSettings>
   resetSettings: (section?: keyof AppSettings) => Promise<AppSettings>
@@ -214,8 +216,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.removeListener(PROCESSING_EVENTS.DEBUG_ERROR, subscription)
     }
   },
-  onSolutionError: (callback: (error: string) => void) => {
-    const subscription = (_: any, error: string) => callback(error)
+  onSolutionError: (callback: (error: string, requestId?: string) => void) => {
+    const subscription = (_: any, error: string, requestId?: string) => callback(error, requestId)
     ipcRenderer.on(PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, subscription)
     return () => {
       ipcRenderer.removeListener(PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, subscription)
@@ -306,9 +308,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   switchToOllama: (model?: string, url?: string) =>
     ipcRenderer.invoke("switch-to-ollama", model, url),
   testLlmConnection: (providerId?: string) => ipcRenderer.invoke("test-llm-connection", providerId),
-  processScreenshotWithChoice: (analysisType: "analyze" | "answer") =>
-    ipcRenderer.invoke("process-screenshot-with-choice", analysisType),
-  cancelScreenshotProcessing: () => ipcRenderer.invoke("cancel-screenshot-processing"),
+  processScreenshotWithChoice: (analysisType: "analyze" | "answer", requestId: string) =>
+    ipcRenderer.invoke("process-screenshot-with-choice", analysisType, requestId),
+  cancelScreenshotProcessing: (requestId: string) => ipcRenderer.invoke("cancel-screenshot-processing", requestId),
   onScreenshotError: (
     callback: (data: { message: string; code?: string; actionable?: boolean }) => void
   ) => {
@@ -330,6 +332,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openScreenRecordingSettings: () => ipcRenderer.invoke("open-screen-recording-settings"),
 
   // Settings
+  getSettingsPersistenceStatus: () => ipcRenderer.invoke("settings:persistence"),
+  retrySettingsPersistence: () => ipcRenderer.invoke("settings:retryPersistence"),
+  onSettingsPersistenceChanged: (callback: (status: SettingsPersistenceStatus) => void) => {
+    const subscription = (_: unknown, status: SettingsPersistenceStatus) => callback(status)
+    ipcRenderer.on("settings:persistence-changed", subscription)
+    return () => ipcRenderer.removeListener("settings:persistence-changed", subscription)
+  },
   getSettings: () => ipcRenderer.invoke("settings:getAll"),
   setSettings: (patch: DeepPartial<AppSettings>) => ipcRenderer.invoke("settings:set", patch),
   resetSettings: (section?: keyof AppSettings) => ipcRenderer.invoke("settings:reset", section),
@@ -359,7 +368,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   chatStream: (message: string, handlers: ChatStreamHandlers) => {
-    const id = ++chatSeq
+    const id = crypto.randomUUID()
     const onToken = (_: any, t: string) => handlers.onToken?.(t)
     const cleanup = () => {
       ipcRenderer.removeListener(`llm:token:${id}`, onToken)

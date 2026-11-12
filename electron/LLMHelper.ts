@@ -3,7 +3,8 @@ import path from "path"
 import { SettingsService } from "./config/SettingsService"
 import { SecretStore } from "./config/SecretStore"
 import { AudioService } from "./audio/AudioService"
-import type { AiProviderSettings } from "./config/schema"
+import { coerceProviderSettings, type AiProviderSettings } from "./config/schema"
+import { setTimeout as delay } from "node:timers/promises"
 import { cleanJsonResponse, heuristicVision } from "./llm/parse"
 import { selectModel, type TaskContext, type ModelTiers } from "./llm/router"
 import { pickModel } from "./llm/pick"
@@ -145,10 +146,12 @@ export class LLMHelper {
   }
 
   private createProvider(config: AiProviderSettings): LlmProvider {
+    config = coerceProviderSettings(config.id, config)
     if (config.type === "ollama") return new OllamaProvider(config)
     if (config.type === "bitecodes") {
-      return new BitecodesProvider(config, () => SecretStore.getInstance().getProviderApiKey(config.id), {
-        onUnauthorized: () => BitecodesAuth.getInstance().handleRevoked(),
+      const auth = BitecodesAuth.getInstance()
+      return new BitecodesProvider(config, () => config.id === "bitecodes" ? auth.getToken() : SecretStore.getInstance().getProviderApiKey(config.id), {
+        onUnauthorized: config.id === "bitecodes" ? auth.revocationHandler() : undefined,
         client: notesClient(),
       })
     }
@@ -291,10 +294,11 @@ export class LLMHelper {
     if (UpdateChecker.getInstance().isUpdateRequired()) {
       throw new Error("This version of Notes is no longer supported. Download the update to continue.")
     }
-    if (!SecretStore.getInstance().hasProviderApiKey("bitecodes")) throw new Error(LOGIN_REQUIRED)
+    if (!BitecodesAuth.getInstance().getToken()) throw new Error(LOGIN_REQUIRED)
   }
 
   private async generate(prompt: string, opts: GenerateOpts = {}): Promise<string> {
+    opts.signal?.throwIfAborted()
     this.requireSignIn()
     const ctx: TaskContext = { prompt, hasImage: Boolean(opts.images?.length) }
     const providers = this.providerSequence(opts.providerId, opts.skipProviderIds)
@@ -315,6 +319,7 @@ export class LLMHelper {
     for (const [providerIndex, config] of providers.entries()) {
       // A revoked sign-in (401 from Bitecodes) ends the chain: no fallback
       // provider may answer for a signed-out user.
+      opts.signal?.throwIfAborted()
       this.requireSignIn()
       const provider = this.createProvider(config)
       // When another provider is waiting, a struggling one gets a short leash:
@@ -336,11 +341,14 @@ export class LLMHelper {
         try {
           primary = await this.chooseModel(config, ctx)
         } catch (err: any) {
+          opts.signal?.throwIfAborted()
           errors.push(`${config.name}: ${err?.message ?? err}`)
           continue
         }
+        opts.signal?.throwIfAborted()
         // chooseModel just populated the 30s discovery cache, so this is free.
         discovered = await this.discoverModels(config.id).catch((): null => null)
+        opts.signal?.throwIfAborted()
         candidates = planCandidateModels({
           config,
           hasImage: ctx.hasImage,
@@ -479,9 +487,7 @@ export class LLMHelper {
               break
             }
             attempt++
-            await new Promise((resolve) =>
-              setTimeout(resolve, backoffDelayMs(attempt, RETRY_BASE_MS, RETRY_CAP_MS))
-            )
+            await delay(backoffDelayMs(attempt, RETRY_BASE_MS, RETRY_CAP_MS), undefined, { signal: opts.signal })
           } finally {
             if (deadline) clearTimeout(deadline)
             opts.signal?.removeEventListener("abort", forwardAbort)
@@ -821,13 +827,13 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
     this.requireSignIn()
     if (!data) throw new Error("No audio was received. Record again and try again.")
     const config = this.settings.get("ai").providers.bitecodes
-    const token = SecretStore.getInstance().getProviderApiKey("bitecodes")
+    const token = BitecodesAuth.getInstance().getToken()
     let hostedError: Error | null = null
     if (config && token) {
       try {
         const text = await transcribeWithBitecodes(config.endpoint, token, data, mimeType, {
           client: notesClient(),
-          onUnauthorized: () => BitecodesAuth.getInstance().handleRevoked(),
+          onUnauthorized: BitecodesAuth.getInstance().revocationHandler(),
         })
         return { text, timestamp: Date.now() }
       } catch (error: any) {

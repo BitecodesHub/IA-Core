@@ -18,6 +18,7 @@ export function useLocalShortcuts(
   useEffect(() => {
     const effective = resolveEffectiveLocalBindings(bindings ?? {})
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return
       const accel = keyboardEventToAccelerator(event)
       if (!accel) return
       for (const [id, binding] of Object.entries(effective) as Array<
@@ -32,7 +33,7 @@ export function useLocalShortcuts(
         return
       }
     }
-    window.addEventListener("keydown", onKeyDown, true)
-    return () => window.removeEventListener("keydown", onKeyDown, true)
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
   }, [bindings, handlers])
 }

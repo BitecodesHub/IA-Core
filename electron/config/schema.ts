@@ -494,6 +494,15 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v)
 }
 
+/** Only own data at settings boundaries; inherited settings are not overrides. */
+function ownRecord(v: unknown): Record<string, unknown> {
+  return Object.assign(Object.create(null), isObject(v) ? v : {})
+}
+
+function hasOwn(v: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(v, key)
+}
+
 function num(v: unknown, def: number, min: number, max: number): number {
   const n = typeof v === "number" && Number.isFinite(v) ? v : def
   return Math.min(max, Math.max(min, n))
@@ -577,7 +586,7 @@ function oneOf<T extends string>(v: unknown, def: T, allowed: readonly T[]): T {
 
 function providerId(v: unknown, def: string): string {
   if (typeof v !== "string") return def
-  return /^[a-zA-Z0-9_.-]{1,64}$/.test(v) ? v : def
+  return /^[a-zA-Z0-9_.-]{1,64}$/.test(v) && !["__proto__", "prototype", "constructor"].includes(v) ? v : def
 }
 
 /** Coerce to an array of non-empty strings, capped and de-duplicated. */
@@ -643,16 +652,24 @@ export const PINNED_PROVIDER_ENDPOINTS: Record<string, string> = {
   vertex: "https://australia-southeast1-aiplatform.googleapis.com/v1",
 }
 
-function coerceProvider(raw: unknown, def: AiProviderSettings): AiProviderSettings {
-  const r = isObject(raw) ? raw : {}
-  const type = oneOf(r.type, def.type, ["ollama", "openai-compatible", "vertex-gemini", "bedrock-converse", "bitecodes"] as const)
+/** The map/credential slot owns identity and built-in protocol, never an editable field. */
+export function coerceProviderSettings(id: string, raw: unknown): AiProviderSettings {
+  if (!providerId(id, "")) throw new Error("Invalid provider id.")
+  const managed = hasOwn(DEFAULT_SETTINGS.ai.providers, id)
+  const def: AiProviderSettings = managed
+    ? DEFAULT_SETTINGS.ai.providers[id]
+    : { ...CUSTOM_PROVIDER_TEMPLATE, id, name: id }
+  const r = ownRecord(raw)
+  const type = managed ? def.type : oneOf(r.type, def.type, ["ollama", "openai-compatible", "vertex-gemini", "bedrock-converse", "bitecodes"] as const)
   const allowRemote = type !== "ollama" ? bool(r.allowRemote, def.allowRemote) : false
   return {
-    id: providerId(r.id, def.id),
+    id,
     name: str(r.name, def.name).slice(0, 80) || def.name,
     type,
     enabled: bool(r.enabled, def.enabled),
-    endpoint: coerceProviderEndpoint(type, r.endpoint, def.endpoint, allowRemote),
+    endpoint: hasOwn(PINNED_PROVIDER_ENDPOINTS, id)
+      ? PINNED_PROVIDER_ENDPOINTS[id]
+      : coerceProviderEndpoint(type, r.endpoint, def.endpoint, allowRemote),
     allowRemote,
     apiKeyRequired: bool(r.apiKeyRequired, def.apiKeyRequired),
     lowModel: str(r.lowModel, def.lowModel),
@@ -674,27 +691,28 @@ function coerceProvider(raw: unknown, def: AiProviderSettings): AiProviderSettin
  * Always returns a valid `AppSettings`; never throws.
  */
 export function coerceSettings(raw: unknown): AppSettings {
-  const r = isObject(raw) ? raw : {}
+  const r = ownRecord(raw)
   const d = DEFAULT_SETTINGS
 
-  const aiRaw = isObject(r.ai) ? r.ai : {}
-  const ollamaRaw = isObject(r.ollama) ? r.ollama : {}
-  const audioRaw = isObject(r.audio) ? r.audio : {}
-  const windowRaw = isObject(r.window) ? r.window : {}
-  const shortcutsRaw = isObject(r.shortcuts) ? r.shortcuts : {}
-  const localShortcutsRaw = isObject(r.localShortcuts) ? r.localShortcuts : {}
-  const generalRaw = isObject(r.general) ? r.general : {}
+  const aiRaw = ownRecord(r.ai)
+  const ollamaRaw = ownRecord(r.ollama)
+  const audioRaw = ownRecord(r.audio)
+  const windowRaw = ownRecord(r.window)
+  const shortcutsRaw = ownRecord(r.shortcuts)
+  const localShortcutsRaw = ownRecord(r.localShortcuts)
+  const generalRaw = ownRecord(r.general)
 
   // Window position: null or {x,y} integers.
   let position: WindowSettings["position"] = null
   if (isObject(windowRaw.position)) {
+    const pos = ownRecord(windowRaw.position)
     position = {
-      x: int(windowRaw.position.x, 0, -100000, 100000),
-      y: int(windowRaw.position.y, 0, -100000, 100000),
+      x: int(pos.x, 0, -100000, 100000),
+      y: int(pos.y, 0, -100000, 100000),
     }
   }
 
-  const sizeRaw = isObject(windowRaw.size) ? windowRaw.size : {}
+  const sizeRaw = ownRecord(windowRaw.size)
 
   // Shortcut bindings: keep only known action ids; each value is a string or null.
   const bindings: Partial<Record<ShortcutActionId, Binding>> = {}
@@ -718,28 +736,15 @@ export function coerceSettings(raw: unknown): AppSettings {
   }
 
   const providerDefaults = d.ai.providers
-  const providersRaw = isObject(aiRaw.providers) ? aiRaw.providers : {}
+  const providersRaw = ownRecord(aiRaw.providers)
   const providers: Record<string, AiProviderSettings> = {}
   const providerKeys = new Set([...Object.keys(providerDefaults), ...Object.keys(providersRaw)])
   for (const rawId of providerKeys) {
-    if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(rawId)) continue
-    const defProvider =
-      providerDefaults[rawId] ??
-      ({
-        ...CUSTOM_PROVIDER_TEMPLATE,
-        id: rawId,
-        name: rawId,
-      } satisfies AiProviderSettings)
-    providers[rawId] = coerceProvider(providersRaw[rawId], defProvider)
-    providers[rawId].id = rawId
-    // Pin managed cloud endpoints by the map key (authoritative identity), so a
-    // decoupled inner `id` cannot slip a hostile endpoint past the pin.
-    const pinnedEndpoint = PINNED_PROVIDER_ENDPOINTS[rawId]
-    if (pinnedEndpoint) providers[rawId].endpoint = pinnedEndpoint
+    if (!providerId(rawId, "")) continue
+    providers[rawId] = coerceProviderSettings(rawId, providersRaw[rawId])
   }
-  if (!providers.ollama) providers.ollama = coerceProvider({}, providerDefaults.ollama)
   const rawActive = providerId(aiRaw.activeProviderId, d.ai.activeProviderId)
-  const activeProviderId = providers[rawActive] ? rawActive : d.ai.activeProviderId
+  const activeProviderId = hasOwn(providers, rawActive) ? rawActive : d.ai.activeProviderId
   const rawFallbacks = Array.isArray(aiRaw.fallbackProviderIds)
     ? aiRaw.fallbackProviderIds
     : d.ai.fallbackProviderIds
@@ -747,7 +752,7 @@ export function coerceSettings(raw: unknown): AppSettings {
     new Set(
       rawFallbacks
         .map((id) => providerId(id, ""))
-        .filter((id) => id && id !== activeProviderId && !!providers[id])
+        .filter((id) => id && id !== activeProviderId && hasOwn(providers, id))
     )
   )
 

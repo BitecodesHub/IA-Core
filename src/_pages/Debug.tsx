@@ -1,18 +1,11 @@
 // Debug.tsx
-import React, { useState, useEffect, useRef } from "react"
+import React, { useState, useEffect } from "react"
 import { useQuery, useQueryClient } from "react-query"
 import { QUERY_STALE_TIME, QUERY_CACHE_TIME } from "../config/environment"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { dracula } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { ComplexitySection, ContentSection } from "../components/Solutions/ContentSection"
 import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
-import {
-  Toast,
-  ToastDescription,
-  ToastMessage,
-  ToastTitle,
-  ToastVariant,
-} from "../components/ui/toast"
 import ExtraScreenshotsQueueHelper from "../components/Solutions/SolutionCommands"
 import { diffLines } from "diff"
 
@@ -186,7 +179,6 @@ interface DebugProps {
 
 const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
   const queryClient = useQueryClient()
-  const contentRef = useRef<HTMLDivElement>(null)
 
   const [oldCode, setOldCode] = useState<string | null>(null)
   const [newCode, setNewCode] = useState<string | null>(null)
@@ -194,50 +186,31 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
   const [timeComplexityData, setTimeComplexityData] = useState<string | null>(null)
   const [spaceComplexityData, setSpaceComplexityData] = useState<string | null>(null)
 
-  const [toastOpen, setToastOpen] = useState(false)
-  const [toastMessage, setToastMessage] = useState<ToastMessage>({
-    title: "",
-    description: "",
-    variant: "neutral",
-  })
+  const [failure, setFailure] = useState<string | null>(null)
 
-  const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const [tooltipHeight, setTooltipHeight] = useState(0)
-
-  const { data: extraScreenshots = [], refetch } = useQuery({
+  const { data: extraScreenshots = [], refetch, error: screenshotsError, isFetching } = useQuery({
     queryKey: ["extras"],
-    queryFn: async () => {
-      try {
-        const existing = await window.electronAPI.getScreenshots()
-        return existing
-      } catch (error) {
-        console.error("Error loading extra screenshots:", error)
-        return []
-      }
-    },
+    queryFn: () => window.electronAPI.getScreenshots(),
     staleTime: QUERY_STALE_TIME,
     cacheTime: QUERY_CACHE_TIME,
     refetchOnWindowFocus: true,
     refetchOnMount: true,
   })
 
-  const showToast = (title: string, description: string, variant: ToastVariant) => {
-    setToastMessage({ title, description, variant })
-    setToastOpen(true)
-  }
-
   const handleDeleteExtraScreenshot = async (index: number) => {
     const screenshotToDelete = extraScreenshots[index]
-
+    if (!screenshotToDelete) return
+    setFailure(null)
     try {
       const response = await window.electronAPI.deleteScreenshot(screenshotToDelete.path)
 
       if (response.success) {
         refetch()
       } else {
-        console.error("Failed to delete extra screenshot:", response.error)
+        setFailure("Could not delete the screenshot. Try deleting it again.")
       }
     } catch (error) {
+      setFailure("Could not delete the screenshot. Try deleting it again.")
       console.error("Error deleting extra screenshot:", error)
     }
   }
@@ -265,63 +238,50 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
     // Set up event listeners
     const cleanupFunctions = [
       window.electronAPI.onScreenshotTaken(() => refetch()),
-      window.electronAPI.onResetView(() => refetch()),
-      window.electronAPI.onDebugSuccess(() => {
-        setIsProcessing(false) //all the other stuff ahapepns in the parent component, so we just need to do this.
+      window.electronAPI.onResetView(() => {
+        setFailure(null)
+        setIsProcessing(false)
+        refetch()
+      }),
+      window.electronAPI.onDebugSuccess((data) => {
+        setIsProcessing(false)
+        if (!data?.solution) {
+          setFailure("No debug result was returned. Try again.")
+          return
+        }
+        setFailure(null)
+        setOldCode(data.solution.old_code || null)
+        setNewCode(data.solution.new_code || null)
+        setThoughtsData(data.solution.thoughts || null)
+        setTimeComplexityData(data.solution.time_complexity || null)
+        setSpaceComplexityData(data.solution.space_complexity || null)
       }),
       window.electronAPI.onDebugStart(() => {
+        setFailure(null)
         setIsProcessing(true)
       }),
       window.electronAPI.onDebugError((error: string) => {
-        showToast("Processing Failed", "There was an error debugging your code.", "error")
+        setFailure(error || "There was an error debugging your code. Try again.")
         setIsProcessing(false)
         console.error("Processing error:", error)
       }),
     ]
 
-    // Set up resize observer
-    const updateDimensions = () => {
-      if (contentRef.current) {
-        let contentHeight = contentRef.current.scrollHeight
-        const contentWidth = contentRef.current.scrollWidth
-        if (isTooltipVisible) {
-          contentHeight += tooltipHeight
-        }
-        window.electronAPI.updateContentDimensions({
-          width: contentWidth,
-          height: contentHeight,
-        })
-      }
-    }
-
-    const resizeObserver = new ResizeObserver(updateDimensions)
-    if (contentRef.current) {
-      resizeObserver.observe(contentRef.current)
-    }
-    updateDimensions()
-
+    // App owns content sizing; the command bar has no tooltip reservation.
     return () => {
-      resizeObserver.disconnect()
       cleanupFunctions.forEach((cleanup) => cleanup())
     }
   }, [queryClient])
 
-  const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
-    setIsTooltipVisible(visible)
-    setTooltipHeight(height)
-  }
-
   return (
-    <div ref={contentRef} className="relative space-y-3 px-4 py-3 " data-overlay-interactive>
-      <Toast
-        open={toastOpen}
-        onOpenChange={setToastOpen}
-        variant={toastMessage.variant}
-        duration={3000}
-      >
-        <ToastTitle>{toastMessage.title}</ToastTitle>
-        <ToastDescription>{toastMessage.description}</ToastDescription>
-      </Toast>
+    <div className="relative space-y-3 px-4 py-3" data-overlay-interactive>
+      {failure && <p role="alert" className="text-sm text-red-300">{failure}</p>}
+      {Boolean(screenshotsError) && (
+        <div role="alert" className="text-sm text-red-300">
+          Could not load screenshots.
+          <button disabled={isFetching} onClick={() => void refetch()} className="ml-2 underline">Retry</button>
+        </div>
+      )}
 
       {/* Conditionally render the screenshot queue */}
       <div className="bg-transparent w-fit">
@@ -339,7 +299,6 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
       {/* Navbar of commands with the tooltip */}
       <ExtraScreenshotsQueueHelper
         extraScreenshots={extraScreenshots}
-        onTooltipVisibilityChange={handleTooltipVisibilityChange}
       />
 
       {/* Main Content */}
@@ -363,21 +322,21 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
                   </div>
                 )
               }
-              isLoading={!thoughtsData}
+              isLoading={isProcessing && !failure && !thoughtsData}
             />
 
             {/* Code Comparison Section */}
             <CodeComparisonSection
               oldCode={oldCode}
               newCode={newCode}
-              isLoading={!oldCode || !newCode}
+              isLoading={isProcessing && !failure && (!oldCode || !newCode)}
             />
 
             {/* Complexity Section */}
             <ComplexitySection
               timeComplexity={timeComplexityData}
               spaceComplexity={spaceComplexityData}
-              isLoading={!timeComplexityData || !spaceComplexityData}
+              isLoading={isProcessing && !failure && (!timeComplexityData || !spaceComplexityData)}
             />
           </div>
         </div>

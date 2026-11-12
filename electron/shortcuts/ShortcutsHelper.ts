@@ -317,8 +317,10 @@ export class ShortcutsHelper {
         try {
           const screenshotPath = await s.takeScreenshot()
           const preview = await s.getImagePreview(screenshotPath)
+          if (win.isDestroyed()) return
           win.webContents.send("screenshot-taken", { path: screenshotPath, preview })
         } catch (err: any) {
+          if (err?.name === "AbortError" || win.isDestroyed()) return
           console.error("[Shortcuts] Screenshot failed:", err)
           win.webContents.send("screenshot-error", {
             message: err?.message ?? String(err),

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import { IoLogOutOutline } from "react-icons/io5"
 import { AlertTriangle, Check, Copy, Loader2, Mic, Settings, Square, X } from "lucide-react"
+import bitecodesLogo from "../../assets/bitecodes-logo.png"
 
 interface QueueCommandsProps {
   screenshots: Array<{ path: string; preview: string }>
@@ -10,7 +11,7 @@ interface QueueCommandsProps {
   mode: "offline" | "online"
 }
 
-type VoicePhase = "idle" | "recording" | "transcribing"
+type VoicePhase = "idle" | "acquiring" | "recording" | "transcribing"
 
 interface Transcript {
   text: string
@@ -91,58 +92,75 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
-  const discardRef = useRef(false)
   const startedAtRef = useRef(0)
-  const recordedSecondsRef = useRef(0)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const rafRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const requestRef = useRef(0)
+  const busyRef = useRef(false)
+  const mountedRef = useRef(true)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Stealth: the microphone, meter loop and timers must all be released on
-  // unmount so the OS mic-in-use indicator never lingers.
+  // Own all resources, including the progress timer while transcription awaits IPC.
   const releaseMic = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
+    rafRef.current = 0
+    if (timerRef.current !== null) clearInterval(timerRef.current)
+    timerRef.current = null
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
-    audioCtxRef.current?.close().catch(() => {})
+    const ctx = audioCtxRef.current
     audioCtxRef.current = null
-    setLevel(0)
+    if (ctx) void ctx.close().catch(() => {})
   }, [])
 
-  useEffect(() => {
-    return () => {
-      requestRef.current++
-      discardRef.current = true
-      const rec = recorderRef.current
-      if (rec && rec.state !== "inactive") rec.stop()
-      releaseMic()
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
-    }
-  }, [releaseMic])
-
-  const finalizeRecording = useCallback(async () => {
+  const invalidateRecording = useCallback(() => {
+    requestRef.current++
+    busyRef.current = false
     const rec = recorderRef.current
     recorderRef.current = null
+    if (rec) {
+      rec.ondataavailable = null
+      rec.onstop = null
+      rec.onerror = null
+      try {
+        if (rec.state !== "inactive") rec.stop()
+      } catch { /* tracks still get released if the recorder has failed */ }
+    }
+    chunksRef.current = []
     releaseMic()
-    const seconds = recordedSecondsRef.current
+  }, [releaseMic])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      invalidateRecording()
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    }
+  }, [invalidateRecording])
+
+  const cancelRecording = useCallback(() => {
+    invalidateRecording()
+    setPhase("idle")
+    setElapsed(0)
+    setLevel(0)
+  }, [invalidateRecording])
+
+  const finalizeRecording = useCallback(async (id: number, rec: MediaRecorder) => {
+    if (id !== requestRef.current || recorderRef.current !== rec) return
+    recorderRef.current = null
+    rec.ondataavailable = null
+    rec.onstop = null
+    rec.onerror = null
+    releaseMic()
+    setLevel(0)
+    const seconds = (Date.now() - startedAtRef.current) / 1000
     const chunks = chunksRef.current
     chunksRef.current = []
-
-    if (discardRef.current) {
-      discardRef.current = false
-      setPhase("idle")
-      setElapsed(0)
-      return
-    }
-
-    const blob = new Blob(chunks, { type: chunks[0]?.type || rec?.mimeType || "audio/webm" })
+    const blob = new Blob(chunks, { type: chunks[0]?.type || rec.mimeType || "audio/webm" })
     if (seconds < MIN_RECORD_SECONDS || blob.size < 1200) {
+      busyRef.current = false
       setPhase("idle")
       setElapsed(0)
       setVoiceError({
@@ -155,13 +173,12 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
     setPhase("transcribing")
     setElapsed(0)
     const startedAt = Date.now()
-    const transcribeTimer = setInterval(
-      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
-      500
-    )
-    const id = ++requestRef.current
+    timerRef.current = setInterval(() => {
+      if (id === requestRef.current) setElapsed(Math.floor((Date.now() - startedAt) / 1000))
+    }, 500)
     try {
       const base64 = await blobToBase64(blob)
+      if (id !== requestRef.current) return
       const result = await window.electronAPI.analyzeAudioFromBase64(base64, blob.type)
       if (id !== requestRef.current) return
       const text = (result?.text ?? "").trim()
@@ -171,7 +188,6 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           message: "No speech was detected. Try again a little closer to the microphone.",
         })
       } else {
-        // Results stay on screen until dismissed — never auto-clear.
         setTranscript({
           text,
           analysis: result?.analysis?.trim() || undefined,
@@ -184,8 +200,9 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       if (id !== requestRef.current) return
       setVoiceError(friendlyVoiceError(cleanIpcError(err)))
     } finally {
-      clearInterval(transcribeTimer)
       if (id === requestRef.current) {
+        releaseMic()
+        busyRef.current = false
         setPhase("idle")
         setElapsed(0)
       }
@@ -195,24 +212,22 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   const stopRecording = useCallback(() => {
     const rec = recorderRef.current
     if (!rec || rec.state === "inactive") return
-    recordedSecondsRef.current = (Date.now() - startedAtRef.current) / 1000
-    rec.stop()
-  }, [])
-
-  const cancelRecording = useCallback(() => {
-    const rec = recorderRef.current
-    discardRef.current = true
-    if (rec && rec.state !== "inactive") {
-      rec.stop()
-    } else {
+    try {
+      // onstop may be queued; release the microphone immediately, keep its chunks.
       releaseMic()
-      setPhase("idle")
-      setElapsed(0)
+      rec.stop()
+    } catch {
+      cancelRecording()
+      setVoiceError({ kind: "mic", message: "Could not finish recording. Please try again." })
     }
-  }, [releaseMic])
+  }, [cancelRecording, releaseMic])
 
   const startRecording = useCallback(async () => {
-    if (phase !== "idle") return
+    // React state has not necessarily rendered before a second activation.
+    if (busyRef.current || !mountedRef.current) return
+    busyRef.current = true
+    const id = ++requestRef.current
+    setPhase("acquiring")
     setVoiceError(null)
     setCopied(false)
 
@@ -222,6 +237,8 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       })
     } catch (err: any) {
+      if (id !== requestRef.current) return
+      cancelRecording()
       const name = err?.name ?? ""
       setVoiceError({
         kind: "mic",
@@ -234,9 +251,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       })
       return
     }
+    if (id !== requestRef.current) {
+      stream.getTracks().forEach((t) => t.stop())
+      return
+    }
     streamRef.current = stream
 
-    // Loudness meter (best-effort; recording works without it).
+    // Loudness meter is best-effort; recording works without it.
     try {
       const Ctx = window.AudioContext ?? (window as any).webkitAudioContext
       const ctx = new Ctx()
@@ -246,6 +267,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       ctx.createMediaStreamSource(stream).connect(analyser)
       const data = new Uint8Array(analyser.fftSize)
       const tick = () => {
+        if (id !== requestRef.current || !streamRef.current) return
         analyser.getByteTimeDomainData(data)
         let sum = 0
         for (let i = 0; i < data.length; i++) {
@@ -258,49 +280,55 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       }
       rafRef.current = requestAnimationFrame(tick)
     } catch {
-      /* meter unavailable — recording still works */
+      const ctx = audioCtxRef.current
+      audioCtxRef.current = null
+      if (ctx) void ctx.close().catch(() => {})
     }
 
-    let recorder: MediaRecorder
     try {
       const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : undefined
-      recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
+      recorderRef.current = recorder
+      chunksRef.current = []
+      recorder.ondataavailable = (e) => {
+        if (id === requestRef.current && e.data.size > 0) chunksRef.current.push(e.data)
+      }
+      recorder.onstop = () => { void finalizeRecording(id, recorder) }
+      recorder.onerror = () => {
+        if (id !== requestRef.current) return
+        cancelRecording()
+        setVoiceError({ kind: "mic", message: "Recording failed. Please try again." })
+      }
+      startedAtRef.current = Date.now()
+      recorder.start(250)
+      if (id !== requestRef.current || recorderRef.current !== recorder) return
+      setElapsed(0)
+      setPhase("recording")
+      timerRef.current = setInterval(() => {
+        if (id !== requestRef.current) return
+        const s = Math.floor((Date.now() - startedAtRef.current) / 1000)
+        setElapsed(s)
+        if (s >= MAX_RECORD_SECONDS) stopRecording()
+      }, 250)
     } catch {
-      releaseMic()
-      setVoiceError({ kind: "mic", message: "Recording is not supported on this device." })
-      return
+      cancelRecording()
+      setVoiceError({ kind: "mic", message: "Could not start recording on this device. Please try again." })
     }
-    recorderRef.current = recorder
-    chunksRef.current = []
-    discardRef.current = false
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data)
-    }
-    recorder.onstop = () => {
-      void finalizeRecording()
-    }
-    recorder.start(250)
-    startedAtRef.current = Date.now()
-    recordedSecondsRef.current = 0
-    setElapsed(0)
-    setPhase("recording")
-    timerRef.current = setInterval(() => {
-      const s = Math.floor((Date.now() - startedAtRef.current) / 1000)
-      setElapsed(s)
-      if (s >= MAX_RECORD_SECONDS) stopRecording()
-    }, 250)
-  }, [phase, releaseMic, finalizeRecording, stopRecording])
+  }, [cancelRecording, finalizeRecording, stopRecording])
 
-  // Esc discards an in-flight recording without transcribing it.
+  // Bubble after focused controls, but before the window-level app shortcuts.
   useEffect(() => {
-    if (phase !== "recording") return
+    if (phase !== "recording" && phase !== "acquiring") return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancelRecording()
+      if (e.key !== "Escape" || e.defaultPrevented) return
+      e.preventDefault()
+      e.stopPropagation()
+      cancelRecording()
     }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
   }, [phase, cancelRecording])
 
   const handleCopy = useCallback(async () => {
@@ -320,6 +348,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         return
       }
     }
+    if (!mountedRef.current) return
     setCopied(true)
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
     copyTimerRef.current = setTimeout(() => setCopied(false), 1600)
@@ -370,7 +399,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 
         .logo-circle {
           position: relative;
-          background: #000000;
+          background: #ffffff;
           overflow: hidden;
         }
 
@@ -394,17 +423,23 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           pointer-events: none;
         }
 
+        .glass-capsule,
+        .voice-panel {
+          --text-primary: #ffffff;
+          --text-secondary: rgba(255, 255, 255, 0.8);
+          --text-muted: rgba(255, 255, 255, 0.6);
+        }
+
         .stable-button {
           background: #000000;
           border: 1px solid rgba(255, 255, 255, 0.5);
-          transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+          transition: border-color 0.2s ease, background-color 0.2s ease;
           position: relative;
           isolation: isolate;
         }
 
         .stable-button:hover {
-          background: #ffffff;
-          color: #000000;
+          background: rgba(255, 255, 255, 0.2);
           border-color: rgba(255, 255, 255, 1);
         }
 
@@ -466,8 +501,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         }
 
         .voice-action:hover {
-          background: #ffffff;
-          color: #000000;
+          background: rgba(255, 255, 255, 0.2);
           border-color: #ffffff;
         }
 
@@ -491,7 +525,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         {/* Logo + name */}
         <div className="flex items-center gap-2 sm:gap-3">
           <div className="logo-circle w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center border-2 border-white">
-            <span className="text-xs sm:text-sm font-bold text-white">IA</span>
+            <img src={bitecodesLogo} alt="Bitecodes" className="w-full h-full object-contain scale-[1.3]" draggable={false} />
           </div>
           <span className="text-xs sm:text-sm font-semibold text-white whitespace-nowrap">
           Bitecodes&apos;s AI
@@ -545,6 +579,13 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
               title="Discard recording (Esc)"
               aria-label="Discard recording"
             >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : phase === "acquiring" ? (
+          <div className="flex items-center gap-1.5">
+            <span role="status" className="text-[11px]">Waiting for microphone…</span>
+            <button className="voice-icon-btn" onClick={cancelRecording} type="button" aria-label="Cancel microphone request">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>

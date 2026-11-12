@@ -194,6 +194,25 @@ describe("Bedrock endpoint guard and regions", () => {
 })
 
 describe("BedrockProvider over the wire", () => {
+  it.each(["https://untrusted.invalid", "https://bedrock-runtime.ap-southeast-2.amazonaws.com?redirect=elsewhere"])("blocks direct requests to %s", async (endpoint) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+    const provider = new BedrockProvider({ ...cfg, endpoint }, () => "synthetic-token")
+    await expect(provider.generate({ model: "m", prompt: "hi", stream: false, options: opts })).rejects.toThrow(/Invalid Bedrock/)
+    await expect(provider.listModels()).rejects.toThrow(/Invalid Bedrock/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("rejects redirects for catalog and invocation calls", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonRes(200, { modelSummaries: [] }))
+      .mockResolvedValueOnce(jsonRes(200, { inferenceProfileSummaries: [] }))
+      .mockResolvedValueOnce(jsonRes(200, { output: { message: { content: [{ text: "ok" }] } }, stopReason: "end_turn" }))
+    const provider = new BedrockProvider(cfg, () => "synthetic-token")
+    await provider.listModels()
+    await provider.generate({ model: "m", prompt: "hi", stream: false, options: opts })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    for (const [, init] of fetchMock.mock.calls) expect(init?.redirect).toBe("error")
+  })
   it("streams text, reports reasoning as activity, sends bearer auth and an encoded model id", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       okStream(streamOf([

@@ -3,8 +3,11 @@ import {
   BitecodesProvider,
   BITECODES_DEFAULT_ENDPOINT,
   isAllowedBitecodesEndpoint,
+  fetchMe,
   pollPairing,
+  revokeToken,
   startPairing,
+  transcribeWithBitecodes,
 } from "../electron/llm/bitecodes"
 import type { AiProviderSettings } from "../electron/config/schema"
 
@@ -43,6 +46,24 @@ describe("isAllowedBitecodesEndpoint", () => {
     ["https://user:pw@www.bitecodes.com", false],
     ["not a url", false],
   ])("%s → %s", (url, ok) => expect(isAllowedBitecodesEndpoint(url)).toBe(ok))
+})
+
+describe("credential transport", () => {
+  it("rejects an untrusted endpoint before any authenticated fetch", async () => {
+    const fetchImpl = vi.fn()
+    await expect(fetchMe("https://untrusted.invalid", "synthetic-token", fetchImpl)).rejects.toThrow()
+    await expect(revokeToken("https://untrusted.invalid", "synthetic-token", fetchImpl)).rejects.toThrow()
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it("disallows redirects on status and logout requests", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }))
+    await fetchMe(BITECODES_DEFAULT_ENDPOINT, "synthetic-token", fetchImpl)
+    await revokeToken(BITECODES_DEFAULT_ENDPOINT, "synthetic-token", fetchImpl)
+    for (const call of fetchImpl.mock.calls as unknown as [string, RequestInit][]) {
+      expect(call[1].redirect).toBe("error")
+    }
+  })
 })
 
 describe("BitecodesProvider", () => {
@@ -201,8 +222,6 @@ describe("hosted-model error messages hide internals", () => {
     expect(formatProviderError("NVIDIA NIM/meta/llama: Provider API error 410: gone")).toMatch(/NVIDIA NIM/)
   })
 })
-
-import { transcribeWithBitecodes } from "../electron/llm/bitecodes"
 
 describe("voice transcription via Bitecodes", () => {
   it("posts the recording and returns the transcript", async () => {

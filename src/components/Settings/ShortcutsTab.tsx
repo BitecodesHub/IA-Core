@@ -42,10 +42,16 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
   const { settings, update } = useSettings()
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [category, setCategory] = useState("all")
 
   const load = useCallback(async () => {
-    setSnapshot(await window.electronAPI.getShortcuts())
+    try {
+      setSnapshot(await window.electronAPI.getShortcuts())
+      setLoadError(null)
+    } catch (error: any) {
+      setLoadError(error?.message ?? "Could not load shortcuts.")
+    }
   }, [])
 
   const io = useImportExport(
@@ -126,6 +132,7 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
     })
   }
 
+  if (loadError) return <div className="inline-failure" role="alert">{loadError} <button type="button" onClick={load}>Retry</button></div>
   if (!snapshot || !settings) return <div className="text-xs text-white/60">Loading shortcuts…</div>
 
   const query = search.trim().toLowerCase()

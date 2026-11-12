@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react"
+import React, { useRef, useLayoutEffect } from "react"
 import ThinkingAnswerRenderer from "../ui/ThinkingAnswerRenderer"
 import { AUTO_SCROLL_THRESHOLD } from "../../config/environment"
 import { stripMcqMarker } from "../../lib/mcqAnswer"
@@ -54,24 +54,24 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   onStop,
 }) => {
   const messagesRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (!messagesRef.current) return
-    const { scrollTop, scrollHeight, clientHeight } = messagesRef.current
-    if (scrollHeight - scrollTop - clientHeight < AUTO_SCROLL_THRESHOLD) {
-      messagesRef.current.scrollTop = scrollHeight
+  // Capture intent on scrolling, before a large response changes scrollHeight.
+  const followBottomRef = useRef(true)
+  useLayoutEffect(() => {
+    if (followBottomRef.current && messagesRef.current) {
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight
     }
-  }, [messages])
-
-  useEffect(() => {
-    if (!loading) inputRef.current?.focus()
-  }, [loading])
+  }, [messages, loading])
 
   return (
     <div className="bg-black border-2 border-white rounded-lg p-4 flex flex-col">
       <div
         ref={messagesRef}
+        role="region"
+        aria-label="Conversation"
+        onScroll={(e) => {
+          const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+          followBottomRef.current = scrollHeight - scrollTop - clientHeight < AUTO_SCROLL_THRESHOLD
+        }}
         className="overflow-y-auto mb-3 p-3 rounded-lg bg-black border-2 border-white max-h-64 min-h-[120px]"
       >
         {messages.length === 0 ? (
@@ -108,15 +108,14 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
         }}
       >
         <input
-          ref={inputRef}
+          aria-label="Message"
           data-chat-input="true"
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
           spellCheck={false}
           name="ia-chat-input"
-          className="flex-1 bg-black border-2 border-white px-3 py-2 rounded-lg placeholder-white/60 focus:outline-none focus:border-white"
-          style={{ color: "#ffffff", WebkitTextFillColor: "#ffffff", caretColor: "#ffffff" }}
+          className="min-w-0 flex-1 bg-black border-2 border-white px-3 py-2 rounded-lg"
           placeholder={loading ? "Processing… stop to send a new message" : "Type your message…"}
           value={input}
           onChange={(e) => onInputChange(e.target.value)}

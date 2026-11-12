@@ -89,14 +89,20 @@ const App: React.FC = () => {
     if (!containerRef.current) return
 
     let rafId: number | null = null
+    let lastDimensions: { width: number; height: number } | null = null
     const updateHeight = () => {
       if (rafId != null) return
       rafId = requestAnimationFrame(() => {
         rafId = null
         if (!containerRef.current) return
+        const width = Math.ceil(containerRef.current.scrollWidth)
+        const height = Math.ceil(containerRef.current.scrollHeight)
+        if (width <= 0 || height <= 0) return
+        if (lastDimensions?.width === width && lastDimensions.height === height) return
+        lastDimensions = { width, height }
         window.electronAPI?.updateContentDimensions({
-          width: containerRef.current.scrollWidth,
-          height: containerRef.current.scrollHeight,
+          width,
+          height,
           // The sign-in gate is a centred card; the working overlay stays put.
           center: gated,
         })
@@ -172,7 +178,7 @@ const App: React.FC = () => {
       {/* The gate is a fixed-size card: shrink the container to it (w-fit) so
           the window fits it exactly and can be centred; p-4 leaves room for
           its shadow inside the transparent window. */}
-      <div ref={containerRef} className={gated ? "w-fit p-4 text-white" : "min-h-0 text-white"}>
+      <div ref={containerRef} className={`app-content w-fit max-w-full max-h-screen overflow-auto text-white ${gated ? "p-4" : "min-h-0"}`}>
         <QueryClientProvider client={queryClient}>
           <ToastProvider>
             {blocked && update ? (

@@ -39,6 +39,7 @@ async function readError(res: Response): Promise<{ message: string; code: string
 }
 
 function base(endpoint: string): string {
+  if (!isAllowedBitecodesEndpoint(endpoint)) throw new Error("Invalid Bitecodes endpoint.")
   return endpoint.replace(/\/+$/, "")
 }
 
@@ -53,14 +54,14 @@ export const SIGN_IN_REQUIRED = "Sign in with Bitecodes (Settings → AI) to use
 export interface BitecodesProviderOptions {
   fetchImpl?: typeof fetch
   /** Called when the server rejects the token (revoked from the website). */
-  onUnauthorized?: () => void
+  onUnauthorized?: (token: string) => void
   /** App build for the operator's activity log, e.g. "Notes/1.7.0 (darwin; arm64)". */
   client?: string
 }
 
 export class BitecodesProvider implements LlmProvider {
   private readonly fetchImpl: typeof fetch
-  private readonly onUnauthorized?: () => void
+  private readonly onUnauthorized?: (token: string) => void
   private readonly client?: string
 
   constructor(
@@ -125,6 +126,8 @@ export class BitecodesProvider implements LlmProvider {
     try {
       const res = await this.fetchImpl(`${base(this.config.endpoint)}/api/v1/desktop/assistant`, {
         method: "POST",
+        // Never forward tokens or request bodies through an HTTP redirect.
+        redirect: "error",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -142,7 +145,7 @@ export class BitecodesProvider implements LlmProvider {
       kick()
       if (!res.ok) {
         const { message, code } = await readError(res)
-        if (res.status === 401) this.onUnauthorized?.()
+        if (res.status === 401) this.onUnauthorized?.(token)
         // A daily cap will not lift on retry: report it as a refusal (403) so
         // the app moves straight on instead of backing off and retrying.
         if (res.status === 429 && code === "QUOTA_EXCEEDED") throw apiError(403, message)
@@ -222,6 +225,7 @@ export async function fetchMe(
   client?: string
 ): Promise<MeResult> {
   const res = await fetchImpl(`${base(endpoint)}/api/v1/desktop/me`, {
+    redirect: "error",
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json", ...clientHeader(client) },
     signal: AbortSignal.timeout(15_000),
   })
@@ -253,6 +257,7 @@ export async function startPairing(
 ): Promise<PairingStart> {
   const res = await fetchImpl(`${base(endpoint)}/api/v1/desktop/pair`, {
     method: "POST",
+    redirect: "error",
     headers: { "Content-Type": "application/json", ...clientHeader(client) },
     body: JSON.stringify({ label }),
     signal: AbortSignal.timeout(15_000),
@@ -289,6 +294,7 @@ export async function pollPairing(
 ): Promise<PollOutcome> {
   const res = await fetchImpl(`${base(endpoint)}/api/v1/desktop/pair/poll`, {
     method: "POST",
+    redirect: "error",
     headers: { "Content-Type": "application/json", ...clientHeader(client) },
     body: JSON.stringify({ deviceCode }),
     signal: AbortSignal.timeout(15_000),
@@ -312,6 +318,7 @@ export async function revokeToken(
 ): Promise<void> {
   await fetchImpl(`${base(endpoint)}/api/v1/desktop/logout`, {
     method: "POST",
+    redirect: "error",
     headers: { Authorization: `Bearer ${token}`, ...clientHeader(client) },
     signal: AbortSignal.timeout(10_000),
   }).catch(() => {})
@@ -343,11 +350,12 @@ export async function transcribeWithBitecodes(
   token: string,
   audioBase64: string,
   mimeType: string,
-  opts: { fetchImpl?: typeof fetch; client?: string; onUnauthorized?: () => void } = {}
+  opts: { fetchImpl?: typeof fetch; client?: string; onUnauthorized?: (token: string) => void } = {}
 ): Promise<string> {
   const fetchImpl = opts.fetchImpl ?? ((...a) => fetch(...a))
   const res = await fetchImpl(`${base(endpoint)}/api/v1/desktop/transcribe`, {
     method: "POST",
+    redirect: "error",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
@@ -357,7 +365,7 @@ export async function transcribeWithBitecodes(
     signal: AbortSignal.timeout(120_000),
   })
   const d: any = await res.json().catch(() => ({}))
-  if (res.status === 401) opts.onUnauthorized?.()
+  if (res.status === 401) opts.onUnauthorized?.(token)
   if (!res.ok || typeof d?.text !== "string") {
     throw new Error(String(d?.message ?? `Transcription failed (HTTP ${res.status}).`))
   }

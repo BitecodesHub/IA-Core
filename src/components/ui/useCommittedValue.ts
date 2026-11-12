@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type React from "react"
 
 /**
@@ -10,6 +10,7 @@ import type React from "react"
 export function useCommittedValue(external: string, commit: (raw: string) => void) {
   const [draft, setDraft] = useState(external)
   const [focused, setFocused] = useState(false)
+  const skipCommitRef = useRef(false)
 
   useEffect(() => {
     if (!focused) setDraft(external)
@@ -18,18 +19,25 @@ export function useCommittedValue(external: string, commit: (raw: string) => voi
   return {
     value: draft,
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDraft(e.target.value),
-    onFocus: () => setFocused(true),
+    onFocus: () => {
+      skipCommitRef.current = false
+      setFocused(true)
+    },
     onBlur: () => {
       setFocused(false)
-      if (draft !== external) commit(draft)
+      if (!skipCommitRef.current && draft !== external) commit(draft)
+      skipCommitRef.current = false
     },
     onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") {
-        ;(e.target as HTMLInputElement).blur()
-      } else if (e.key === "Escape") {
+      if (e.nativeEvent.isComposing) return
+      if (e.key !== "Enter" && e.key !== "Escape") return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === "Escape") {
+        skipCommitRef.current = true
         setDraft(external)
-        ;(e.target as HTMLInputElement).blur()
       }
+      e.currentTarget.blur()
     },
   }
 }

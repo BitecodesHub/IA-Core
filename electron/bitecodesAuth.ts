@@ -8,6 +8,7 @@
 import { app, shell } from "electron"
 import { SettingsService } from "./config/SettingsService"
 import { SecretStore } from "./config/SecretStore"
+import { coerceProviderEndpoint } from "./config/schema"
 import {
   BITECODES_DEFAULT_ENDPOINT,
   fetchMe,
@@ -50,18 +51,49 @@ export class BitecodesAuth {
 
   private listeners = new Set<Listener>()
   private state: BitecodesAuthState = { phase: "signed-out" }
-  /** Incremented on every start/cancel so a stale poll loop stops itself. */
+  /** Invalidates status, login and revocation callbacks across session changes. */
   private generation = 0
+  /** A failed disk deletion must not silently authenticate again in this process. */
+  private blockedToken: string | null = null
 
   private get endpoint(): string {
-    return (
-      SettingsService.getInstance().get("ai").providers[BITECODES_PROVIDER_ID]?.endpoint ||
-      BITECODES_DEFAULT_ENDPOINT
-    )
+    const providers = SettingsService.getInstance().get("ai").providers
+    const endpoint = Object.prototype.hasOwnProperty.call(providers, BITECODES_PROVIDER_ID)
+      ? providers[BITECODES_PROVIDER_ID]?.endpoint : undefined
+    return coerceProviderEndpoint("bitecodes", endpoint, BITECODES_DEFAULT_ENDPOINT, true)
   }
 
   private get secrets() {
     return SecretStore.getInstance()
+  }
+
+  /** Use for auth gates and requests so failed logout cannot reuse the retained secret. */
+  getToken(): string | null {
+    const token = this.secrets.getProviderApiKey(BITECODES_PROVIDER_ID)
+    return token === this.blockedToken ? null : token
+  }
+
+  private ownsSession(gen: number, token: string | null): boolean {
+    return gen === this.generation && token === this.secrets.getProviderApiKey(BITECODES_PROVIDER_ID)
+  }
+
+  /** Capture before starting an HTTP request; the callback receives its actual token. */
+  revocationHandler(): (token: string) => void {
+    const gen = this.generation
+    return (token) => this.handleRevoked(token, gen)
+  }
+
+  private forgetToken(token: string | null, error?: string): void {
+    this.blockedToken = token
+    const removed = this.secrets.deleteProviderApiKey(BITECODES_PROVIDER_ID)
+    if (!removed.ok) {
+      this.set({
+        phase: "signed-out",
+        error: `${removed.error ?? "Could not remove the stored sign-in."} Sign-out was not saved; retry signing out.`,
+      })
+      return
+    }
+    this.set(error ? { phase: "signed-out", error } : { phase: "signed-out" })
   }
 
   onChange(listener: Listener): () => void {
@@ -83,30 +115,32 @@ export class BitecodesAuth {
   /** Current state, refreshed from the server when a token is stored. */
   async status(): Promise<BitecodesAuthState> {
     if (this.state.phase === "waiting") return this.state
-    const token = this.secrets.getProviderApiKey(BITECODES_PROVIDER_ID)
+    const gen = this.generation
+    const token = this.getToken()
     if (!token) {
       if (this.state.phase !== "signed-out") this.set({ phase: "signed-out" })
       return this.state
     }
+    const current = () => this.ownsSession(gen, token) && this.state.phase !== "waiting"
+    const offline = () => this.set(this.state.phase === "signed-in"
+      ? { ...this.state, available: false }
+      : { phase: "signed-in", name: null, email: null, available: false })
     try {
       const me = await fetchMe(this.endpoint, token, undefined, notesClient())
+      if (!current()) return this.state
       if (me.ok === false) {
         if (me.unauthorized) {
-          // Revoked from the website (or expired): forget it locally too.
-          this.secrets.deleteProviderApiKey(BITECODES_PROVIDER_ID)
-          this.set({ phase: "signed-out", error: me.error })
-          return this.state
+          this.generation++
+          this.forgetToken(token, me.error)
+        } else {
+          // Offline results and broadcasts must describe the same state.
+          offline()
         }
-        // Server unreachable: still signed in as far as we know.
-        return this.state.phase === "signed-in"
-          ? this.state
-          : { phase: "signed-in", name: null, email: null, available: false }
+        return this.state
       }
       this.set({ phase: "signed-in", name: me.name, email: me.email, available: me.available })
     } catch {
-      if (this.state.phase !== "signed-in") {
-        this.set({ phase: "signed-in", name: null, email: null, available: false })
-      }
+      if (current()) offline()
     }
     return this.state
   }
@@ -114,15 +148,16 @@ export class BitecodesAuth {
   /** Starts a sign-in: opens the browser and resolves once the code is shown. */
   async login(): Promise<BitecodesAuthState> {
     const gen = ++this.generation
+    const token = this.secrets.getProviderApiKey(BITECODES_PROVIDER_ID)
     const endpoint = this.endpoint
     let pairing
     try {
       pairing = await startPairing(endpoint, deviceLabel(), undefined, notesClient())
     } catch (err: any) {
-      this.set({ phase: "signed-out", error: err?.message ?? "Could not reach Bitecodes." })
+      if (this.ownsSession(gen, token)) this.set({ phase: "signed-out", error: err?.message ?? "Could not reach Bitecodes." })
       return this.state
     }
-    if (gen !== this.generation) return this.state
+    if (!this.ownsSession(gen, token)) return this.state
 
     this.set({
       phase: "waiting",
@@ -159,6 +194,7 @@ export class BitecodesAuth {
           this.set({ phase: "signed-out", error: stored.error ?? "Could not store the sign-in securely." })
           return
         }
+        this.blockedToken = null
         this.set({ phase: "signed-in", name: null, email: null, available: false })
         await this.status()
         return
@@ -182,11 +218,10 @@ export class BitecodesAuth {
    * website). Forget it now so the app locks immediately, rather than at the
    * next status check.
    */
-  handleRevoked(): void {
-    if (!this.secrets.getProviderApiKey(BITECODES_PROVIDER_ID)) return
+  handleRevoked(token: string, gen: number): void {
+    if (!this.ownsSession(gen, token)) return
     this.generation++
-    this.secrets.deleteProviderApiKey(BITECODES_PROVIDER_ID)
-    this.set({ phase: "signed-out", error: "Signed out — sign in with Bitecodes again." })
+    this.forgetToken(token, "Signed out — sign in with Bitecodes again.")
   }
 
   /** Re-opens the browser on the pending sign-in (only ever the URL Bitecodes gave us). */
@@ -208,8 +243,7 @@ export class BitecodesAuth {
   async logout(): Promise<BitecodesAuthState> {
     this.generation++
     const token = this.secrets.getProviderApiKey(BITECODES_PROVIDER_ID)
-    this.secrets.deleteProviderApiKey(BITECODES_PROVIDER_ID)
-    this.set({ phase: "signed-out" })
+    this.forgetToken(token)
     // Revoke server-side too, best effort, after the local sign-out is done.
     if (token) void revokeToken(this.endpoint, token, undefined, notesClient())
     return this.state

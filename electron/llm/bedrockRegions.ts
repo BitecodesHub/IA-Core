@@ -54,7 +54,7 @@ const RUNTIME_HOST = /^bedrock-runtime(?:-fips)?\.([a-z]{2}(?:-gov)?-[a-z]+-\d)\
 export function bedrockRegionOf(endpoint: string): string | null {
   try {
     const url = new URL(endpoint)
-    if (url.protocol !== "https:" || url.port || url.username || url.password) return null
+    if (url.protocol !== "https:" || url.port || url.username || url.password || url.search || url.hash) return null
     if (url.pathname !== "/" && url.pathname !== "") return null
     const m = url.hostname.toLowerCase().match(RUNTIME_HOST)
     return m ? m[1] : null

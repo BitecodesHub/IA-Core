@@ -14,6 +14,7 @@ import type {
 import type { AcceleratorValidation } from "../../electron/shortcuts/validation"
 import type { ModelDiscoveryResult, ProviderHealth } from "../../electron/llm/providers"
 import type { PermissionReport } from "../../electron/permissions"
+import type { SettingsPersistenceStatus } from "../../electron/config/SettingsService"
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
 
@@ -40,7 +41,7 @@ export interface ElectronAPI {
   onSolutionStart: (callback: () => void) => () => void
   onDebugStart: (callback: () => void) => () => void
   onDebugSuccess: (callback: (data: any) => void) => () => void
-  onSolutionError: (callback: (error: string) => void) => () => void
+  onSolutionError: (callback: (error: string, requestId?: string) => void) => () => void
   onProcessingNoScreenshots: (callback: () => void) => () => void
   onProblemExtracted: (callback: (data: any) => void) => () => void
   onSolutionSuccess: (callback: (data: any) => void) => () => void
@@ -56,9 +57,10 @@ export interface ElectronAPI {
   analyzeAudioFile: (path: string) => Promise<{ text: string; analysis?: string; timestamp: number }>
   getImageBase64: (path: string) => Promise<string>
   processScreenshotWithChoice: (
-    analysisType: "analyze" | "answer"
+    analysisType: "analyze" | "answer",
+    requestId: string
   ) => Promise<{ success: boolean; error?: string }>
-  cancelScreenshotProcessing: () => Promise<{ success: boolean; error?: string }>
+  cancelScreenshotProcessing: (requestId: string) => Promise<{ success: boolean; error?: string }>
   onScreenshotError: (
     callback: (data: { message: string; code?: string; actionable?: boolean }) => void
   ) => () => void
@@ -109,6 +111,9 @@ export interface ElectronAPI {
   ) => Promise<{ success: boolean; error?: string; warning?: string }>
 
   // Settings
+  getSettingsPersistenceStatus: () => Promise<SettingsPersistenceStatus>
+  retrySettingsPersistence: () => Promise<SettingsPersistenceStatus>
+  onSettingsPersistenceChanged: (callback: (status: SettingsPersistenceStatus) => void) => () => void
   getSettings: () => Promise<AppSettings>
   setSettings: (patch: DeepPartial<AppSettings>) => Promise<AppSettings>
   resetSettings: (section?: keyof AppSettings) => Promise<AppSettings>

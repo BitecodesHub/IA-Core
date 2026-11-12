@@ -6,6 +6,7 @@ import http from "node:http"
 
 export function startMockBitecodes(port, { version = "0.0.0" } = {}) {
   const log = []
+  const behavior = { streamDelayMs: 15, assistantFailure: false, transcriptionFailure: false }
   let revoked = false
   const TOKEN = "bcd_mock_token_for_tests"
   const origin = `http://127.0.0.1:${port}`
@@ -62,10 +63,12 @@ export function startMockBitecodes(port, { version = "0.0.0" } = {}) {
       }
       if (p === "/api/v1/desktop/transcribe") {
         if (!authed(req)) return json(res, 401, { ok: false, code: "UNAUTHORIZED", message: "Sign in to Bitecodes again." })
+        if (behavior.transcriptionFailure) return json(res, 400, { ok: false, message: "Synthetic transcription failure" })
         return json(res, 200, { ok: true, text: "hello from the mock transcriber" })
       }
       if (p === "/api/v1/desktop/assistant") {
         if (!authed(req)) return json(res, 401, { ok: false, code: "UNAUTHORIZED", message: "Sign in to Bitecodes again." })
+        if (behavior.assistantFailure) return json(res, 400, { ok: false, message: "Synthetic assistant failure" })
         const n = Array.isArray(body.images) ? body.images.length : 0
         const answer = n
           ? `MOCK-ANSWER: I can see ${n} screenshot(s). def solve(): return 42`
@@ -73,10 +76,13 @@ export function startMockBitecodes(port, { version = "0.0.0" } = {}) {
         res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store" })
         const parts = answer.match(/.{1,12}/g)
         let i = 0
+        let timer
+        res.on("close", () => clearTimeout(timer))
         const tick = () => {
+          if (res.destroyed) return
           if (i < parts.length) {
             res.write(`event: token\ndata: ${JSON.stringify({ delta: parts[i++] })}\n\n`)
-            setTimeout(tick, 15)
+            timer = setTimeout(tick, behavior.streamDelayMs)
           } else {
             res.write(`event: done\ndata: ${JSON.stringify({ usage: { promptTokens: 10, completionTokens: 10 } })}\n\n`)
             res.end()
@@ -88,6 +94,6 @@ export function startMockBitecodes(port, { version = "0.0.0" } = {}) {
     })
   })
   return new Promise((resolve) =>
-    server.listen(port, "127.0.0.1", () => resolve({ origin, log, close: () => server.close() }))
+    server.listen(port, "127.0.0.1", () => resolve({ origin, log, behavior, close: () => server.close() }))
   )
 }

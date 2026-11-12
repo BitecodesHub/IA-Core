@@ -137,22 +137,27 @@ const Combobox: React.FC<ComboboxProps> = ({
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return
     if (e.key === "ArrowDown") {
       e.preventDefault()
+      e.stopPropagation()
       if (!open) return openMenu()
       setActive((a) => (visible.length ? (a + 1) % visible.length : 0))
     } else if (e.key === "ArrowUp") {
       e.preventDefault()
+      e.stopPropagation()
       if (!open) return openMenu()
       setActive((a) => (visible.length ? (a - 1 + visible.length) % visible.length : 0))
     } else if (e.key === "Enter") {
       if (open) {
         e.preventDefault()
+        e.stopPropagation()
         commit(visible[active])
       }
     } else if (e.key === "Escape") {
       if (open) {
         e.preventDefault()
+        e.stopPropagation()
         close()
       }
     }
@@ -267,6 +272,7 @@ const Combobox: React.FC<ComboboxProps> = ({
                     // onMouseDown (not onClick) so it fires before the input blur.
                     onMouseDown={(e) => {
                       e.preventDefault()
+                      e.stopPropagation()
                       commit(opt)
                     }}
                     onMouseEnter={() => setActive(i)}

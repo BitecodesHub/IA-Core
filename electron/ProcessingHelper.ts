@@ -1,6 +1,6 @@
 // ProcessingHelper.ts
 
-import { AppState } from "./main"
+import type { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { SettingsService } from "./config/SettingsService"
 import { isTransientError } from "./llm/retry"
@@ -15,6 +15,12 @@ export class ProcessingHelper {
   private llmHelper: LLMHelper
   private currentProcessingAbortController: AbortController | null = null
   private currentExtraProcessingAbortController: AbortController | null = null
+  private cancellationListeners = new Set<() => void>()
+
+  public onCancel(listener: () => void): () => void {
+    this.cancellationListeners.add(listener)
+    return () => { this.cancellationListeners.delete(listener) }
+  }
 
   constructor(appState: AppState) {
     this.appState = appState
@@ -65,13 +71,16 @@ export class ProcessingHelper {
         }
       }
 
-      // NEW: Handle screenshot - show popup instead of direct analysis
-      mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
-      this.appState.setView("solutions")
-
-      // Instead of processing immediately, let the frontend show the popup
-      // The actual processing will be triggered by the popup choice
-      if (isDev) console.log("[ProcessingHelper] Screenshot ready for analysis, waiting for user choice")
+      try {
+        const preview = await this.appState.getImagePreview(lastPath)
+        if (!mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("screenshot-taken", { path: lastPath, preview })
+        }
+      } catch (error: any) {
+        if (error?.name !== "AbortError" && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
+        }
+      }
       return
     } else {
       // Debug mode
@@ -82,8 +91,17 @@ export class ProcessingHelper {
         return
       }
 
+      this.currentExtraProcessingAbortController?.abort()
+      const controller = new AbortController()
+      this.currentExtraProcessingAbortController = controller
+      const cancel = () => controller.abort()
+      const onNavigation = (_event: Electron.Event, _url: string, isInPlace: boolean, isMainFrame: boolean) => {
+        if (isMainFrame && !isInPlace) cancel()
+      }
+      mainWindow.webContents.once("destroyed", cancel)
+      mainWindow.webContents.on("did-start-navigation", onNavigation)
+      const current = () => this.currentExtraProcessingAbortController === controller && !controller.signal.aborted && !mainWindow.isDestroyed()
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
-      this.currentExtraProcessingAbortController = new AbortController()
 
       try {
         // Get problem info and current solution
@@ -93,9 +111,9 @@ export class ProcessingHelper {
         }
 
         // Get current solution from state (cancellable via the reset shortcut)
-        const signal = this.currentExtraProcessingAbortController?.signal
+        const signal = controller.signal
         const currentSolution = await this.llmHelper.generateSolution(problemInfo, signal)
-        if (signal?.aborted) return
+        if (!current()) return
         const currentCode = currentSolution.solution.code
 
         // Debug the solution using vision model
@@ -109,19 +127,25 @@ export class ProcessingHelper {
         // If cancelled mid-flight, generateSolution/debugSolutionWithImages swallow the
         // "Request cancelled" error into a placeholder fallback; do NOT broadcast that
         // as a success (it would cache and later show bogus placeholder content).
-        if (signal?.aborted) return
+        if (!current()) return
         this.appState.setHasDebugged(true)
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS, debugResult)
       } catch (error: any) {
-        if (isDev) console.error("Debug processing error:", error)
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_ERROR, error.message)
+        if (current()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_ERROR, error.message)
+        }
       } finally {
-        this.currentExtraProcessingAbortController = null
+        mainWindow.webContents.removeListener("destroyed", cancel)
+        mainWindow.webContents.removeListener("did-start-navigation", onNavigation)
+        if (this.currentExtraProcessingAbortController === controller) {
+          this.currentExtraProcessingAbortController = null
+        }
       }
     }
   }
 
   public cancelOngoingRequests(): void {
+    for (const listener of this.cancellationListeners) listener()
     if (this.currentProcessingAbortController) {
       this.currentProcessingAbortController.abort()
       this.currentProcessingAbortController = null
@@ -174,9 +198,13 @@ export class ProcessingHelper {
   }
 
   // New method to handle screenshot analysis with user choice
-  public async processScreenshotWithChoice(analysisType: "analyze" | "answer"): Promise<void> {
+  public async processScreenshotWithChoice(
+    analysisType: "analyze" | "answer",
+    requestId: string,
+    signal: AbortSignal
+  ): Promise<void> {
     const mainWindow = this.appState.getMainWindow()
-    if (!mainWindow) return
+    if (!mainWindow || mainWindow.isDestroyed()) throw new Error("Window is unavailable.")
 
     const screenshotQueue = this.appState.getScreenshotHelper().getScreenshotQueue()
 
@@ -188,9 +216,7 @@ export class ProcessingHelper {
     }
 
     if (screenshotQueue.length === 0) {
-      if (isDev) console.log("[ProcessingHelper] No screenshots in queue")
-      mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
-      return
+      throw new Error("No screenshots to analyze.")
     }
 
     // Always get the LATEST screenshot (last in queue)
@@ -201,9 +227,20 @@ export class ProcessingHelper {
       console.log("[ProcessingHelper] Analysis type:", analysisType)
     }
 
-    this.currentProcessingAbortController = new AbortController()
+    this.currentProcessingAbortController?.abort()
+    const controller = new AbortController()
+    this.currentProcessingAbortController = controller
+    const abort = () => controller.abort()
+    if (signal.aborted) abort()
+    else signal.addEventListener("abort", abort, { once: true })
+    const assertCurrent = () => {
+      if (controller.signal.aborted || this.currentProcessingAbortController !== controller || mainWindow.isDestroyed()) {
+        throw new DOMException("Request cancelled", "AbortError")
+      }
+    }
 
     try {
+      assertCurrent()
       // Pre-flight connectivity probe. A terminal problem (missing/invalid API
       // key, auth) is surfaced immediately with a friendly message. A transient
       // one (slow link, timeout, 5xx) is NOT fatal: the streaming generation path
@@ -214,6 +251,7 @@ export class ProcessingHelper {
       // and a probe that fails would block an answer a fallback could give.
       const hosted = this.llmHelper.getCurrentProvider() === "bitecodes"
       const connectionTest = hosted ? { success: true as const } : await this.llmHelper.testConnection()
+      assertCurrent()
       if (!connectionTest.success) {
         const reason = connectionTest.error ?? "unknown error"
         if (!isTransientError(reason)) {
@@ -227,10 +265,10 @@ export class ProcessingHelper {
       // Resolve a vision-capable model now (self-heals if capabilities aren't cached yet).
       // Throws a clear, actionable error if none is installed.
       await this.llmHelper.ensureVisionModel()
-
-      // Start streaming analysis and send updates to Solutions view
-      await this.streamImageAnalysisToSolutions(lastPath, mainWindow, analysisType)
+      assertCurrent()
+      await this.streamImageAnalysisToSolutions(lastPath, mainWindow, analysisType, requestId, controller.signal, assertCurrent)
     } catch (error: any) {
+      assertCurrent()
       if (isDev) console.error("Image processing error:", error)
 
       // Remediation depends on the active provider: online (OpenRouter) failures
@@ -266,17 +304,25 @@ export class ProcessingHelper {
 
       mainWindow.webContents.send(
         this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
-        errorMessage
+        errorMessage,
+        requestId
       )
+      throw new Error(errorMessage)
     } finally {
-      this.currentProcessingAbortController = null
+      signal.removeEventListener("abort", abort)
+      if (this.currentProcessingAbortController === controller) {
+        this.currentProcessingAbortController = null
+      }
     }
   }
 
   private async streamImageAnalysisToSolutions(
     imagePath: string,
     mainWindow: any,
-    analysisType: "analyze" | "answer" = "analyze"
+    analysisType: "analyze" | "answer",
+    requestId: string,
+    signal: AbortSignal,
+    assertCurrent: () => void
   ) {
     try {
       // Verify file exists and get stats
@@ -287,6 +333,7 @@ export class ProcessingHelper {
       if (isDev) console.log("[ProcessingHelper] Processing screenshot:", imagePath)
 
       const stats = await fs.promises.stat(imagePath)
+      assertCurrent()
       const fileModifiedTime = stats.mtime
       const fileSize = stats.size
 
@@ -306,6 +353,7 @@ export class ProcessingHelper {
       // capture so text stays legible at ~1 pixel per logical point. A fixed
       // width here was the cause of poor answers on 1440p/4K Windows desktops.
       const resized = await toResizedJpeg(imagePath, { quality: 92 })
+      assertCurrent()
       const base64Image = resized.toString("base64")
 
       if (isDev)
@@ -353,6 +401,7 @@ Output the marker verbatim as an HTML comment and nothing after it. Only options
 
       // Send initial problem info with empty text
       const initialProblemInfo = {
+        requestId,
         problem_statement: "",
         input_format: { description: "Generated from screenshot", parameters: [] as any[] },
         output_format: {
@@ -374,23 +423,43 @@ Output the marker verbatim as an HTML comment and nothing after it. Only options
       this.appState.setProblemInfo(initialProblemInfo)
 
       let accumulatedText = ""
-      const full = await this.llmHelper.streamImageAnalysis(
-        prompts[analysisType],
-        [base64Image],
-        (token) => {
-          accumulatedText += token
-          const updatedProblemInfo = {
-            ...initialProblemInfo,
-            problem_statement: accumulatedText,
-            isStreaming: true,
-          }
-          mainWindow.webContents.send("screenshot-analysis-stream", updatedProblemInfo)
-          this.appState.setProblemInfo(updatedProblemInfo)
-        },
-        this.currentProcessingAbortController?.signal,
-        0.0 // temperature = 0 for maximum accuracy
-      )
-
+      let publishedText = ""
+      let flushTimer: ReturnType<typeof setTimeout> | undefined
+      const clearFlush = () => {
+        clearTimeout(flushTimer)
+        flushTimer = undefined
+      }
+      const flush = () => {
+        clearFlush()
+        if (signal.aborted || mainWindow.isDestroyed() || accumulatedText === publishedText) return
+        publishedText = accumulatedText
+        const update = { ...initialProblemInfo, problem_statement: accumulatedText }
+        mainWindow.webContents.send("screenshot-analysis-stream", update)
+        this.appState.setProblemInfo(update)
+      }
+      signal.addEventListener("abort", clearFlush, { once: true })
+      let full: string
+      try {
+        full = await this.llmHelper.streamImageAnalysis(
+          prompts[analysisType],
+          [base64Image],
+          (token) => {
+            if (signal.aborted) return
+            accumulatedText += token
+            if (!publishedText) flush()
+            else if (!flushTimer) flushTimer = setTimeout(flush, 32)
+          },
+          signal,
+          0.0
+        )
+      } catch (error) {
+        flush()
+        throw error
+      } finally {
+        clearFlush()
+        signal.removeEventListener("abort", clearFlush)
+      }
+      assertCurrent()
       const finalProblemInfo = {
         ...initialProblemInfo,
         problem_statement: full || accumulatedText,

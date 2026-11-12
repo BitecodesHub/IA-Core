@@ -199,7 +199,8 @@ export class AppState {
   }
 
   public clearQueues(): void {
-    this.screenshotHelper.clearQueues()
+    this.processingHelper.cancelOngoingRequests()
+    void this.screenshotHelper.clearQueues()
 
     // Clear problem info
     this.problemInfo = null

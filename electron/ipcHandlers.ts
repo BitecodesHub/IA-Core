@@ -4,7 +4,8 @@ import { ipcMain, app, clipboard } from "electron"
 import path from "node:path"
 import os from "node:os"
 import fs from "node:fs"
-import { AppState } from "./main"
+import type { AppState } from "./main"
+import { RequestRegistry } from "./RequestRegistry"
 import { SettingsService, DeepPartial } from "./config/SettingsService"
 import { SecretStore } from "./config/SecretStore"
 import type { AppSettings } from "./config/schema"
@@ -66,9 +67,15 @@ function assertWithinAudioDirs(p: string): string {
   return path.resolve(p)
 }
 
+function validRequestId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(value)
+}
+
 export function initializeIpcHandlers(appState: AppState): void {
   const settings = SettingsService.getInstance()
   const secrets = SecretStore.getInstance()
+  const requests = new RequestRegistry()
+  appState.processingHelper.onCancel(() => requests.cancelAll())
   ipcMain.handle("update-content-dimensions", async (_event, payload: unknown) => {
     // Validate: a malformed payload must not reach setWindowDimensions.
     if (typeof payload !== "object" || payload === null) return
@@ -106,9 +113,10 @@ export function initializeIpcHandlers(appState: AppState): void {
       const preview = await appState.getImagePreview(screenshotPath)
       return { path: screenshotPath, preview }
     } catch (error: any) {
+      if (error?.name === "AbortError") throw error
       console.error("Error taking screenshot:", error)
       const win = appState.getMainWindow()
-      win?.webContents.send("screenshot-error", {
+      if (win && !win.isDestroyed()) win.webContents.send("screenshot-error", {
         message: error?.message ?? String(error),
         code: error?.code,
         // Whether an OS privacy pane exists for this failure. False on Windows,
@@ -175,22 +183,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle("get-screenshots", async () => {
     if (isDev) console.log({ view: appState.getView() })
     try {
-      let previews = []
-      if (appState.getView() === "queue") {
-        previews = await Promise.all(
-          appState.getScreenshotQueue().map(async (path) => ({
-            path,
-            preview: await appState.getImagePreview(path),
-          }))
-        )
-      } else {
-        previews = await Promise.all(
-          appState.getExtraScreenshotQueue().map(async (path) => ({
-            path,
-            preview: await appState.getImagePreview(path),
-          }))
-        )
-      }
+      const queue = appState.getView() === "queue"
+        ? appState.getScreenshotQueue()
+        : appState.getExtraScreenshotQueue()
+      const results = await Promise.allSettled(queue.map(async (path) => ({
+        path,
+        preview: await appState.getImagePreview(path),
+      })))
+      const previews = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : [])
       if (isDev) previews.forEach((preview: any) => console.log(preview.path))
       return previews
     } catch (error) {
@@ -206,6 +206,8 @@ export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle("reset-queues", async () => {
     try {
       appState.clearQueues()
+      const win = appState.getMainWindow()
+      if (win && !win.isDestroyed()) win.webContents.send("reset-view")
       if (isDev) console.log("Screenshot queues have been cleared.")
       return { success: true }
     } catch (error: any) {
@@ -411,33 +413,38 @@ export function initializeIpcHandlers(appState: AppState): void {
     }))
   })
 
-  // IPC handler for screenshot analysis with user choice
   ipcMain.handle(
     "process-screenshot-with-choice",
-    async (event, analysisType: "analyze" | "answer") => {
+    async (event, analysisType: unknown, requestId: unknown) => {
+      if ((analysisType !== "answer" && analysisType !== "analyze") || !validRequestId(requestId)) {
+        return { success: false, error: "Invalid screenshot request." }
+      }
+      const request = requests.begin(event.sender, `screenshot:${requestId}`)
       try {
-        await appState.processingHelper.processScreenshotWithChoice(analysisType)
-        return { success: true }
+        await appState.processingHelper.processScreenshotWithChoice(analysisType, requestId, request.signal)
+        return { success: request.active() }
       } catch (error: any) {
-        console.error("Error in process-screenshot-with-choice handler:", error)
         return { success: false, error: error.message }
+      } finally {
+        request.finish()
       }
     }
   )
 
-  // IPC handler to cancel screenshot processing
-  ipcMain.handle("cancel-screenshot-processing", async () => {
-    try {
-      appState.processingHelper.cancelOngoingRequests()
-      return { success: true }
-    } catch (error: any) {
-      console.error("Error in cancel-screenshot-processing handler:", error)
-      return { success: false, error: error.message }
-    }
+  ipcMain.handle("cancel-screenshot-processing", async (event, requestId: unknown) => {
+    if (!validRequestId(requestId)) return { success: false, error: "Invalid screenshot request." }
+    requests.cancel(event.sender, `screenshot:${requestId}`)
+    return { success: true }
   })
 
   // --- Settings -----------------------------------------------------------
   ipcMain.handle("settings:getAll", async () => settings.getAll())
+  ipcMain.handle("settings:persistence", async () => settings.getPersistenceStatus())
+  ipcMain.handle("settings:retryPersistence", async () => settings.retryPersistence())
+  settings.onPersistenceChanged((status) => {
+    const win = appState.getMainWindow()
+    if (win && !win.isDestroyed()) win.webContents.send("settings:persistence-changed", status)
+  })
 
   ipcMain.handle("settings:set", async (_e, patch: DeepPartial<AppSettings>) => {
     return settings.set(patch)
@@ -487,20 +494,25 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // --- Streaming chat: renderer never talks to Ollama directly; tokens are
   // streamed back over per-request channels so the renderer needs no network. ---
-  const chatControllers = new Map<number, AbortController>()
-  ipcMain.on("llm:chatStream", (event, payload: { id: number; message: string }) => {
-    const { id, message } = payload
-    const controller = new AbortController()
-    chatControllers.set(id, controller)
+  ipcMain.on("llm:chatStream", (event, payload: unknown) => {
+    if (!payload || typeof payload !== "object") return
+    const { id, message } = payload as { id?: unknown; message?: unknown }
+    if (!validRequestId(id) || typeof message !== "string") return
+    const request = requests.begin(event.sender, `chat:${id}`)
+    const send = (channel: string, value: string) => {
+      if (request.active()) event.sender.send(channel, value)
+    }
     const llm = appState.processingHelper.getLLMHelper()
-    llm
-      .chatStream(message, (t) => event.sender.send(`llm:token:${id}`, t), controller.signal)
-      .then((full) => event.sender.send(`llm:done:${id}`, full))
-      .catch((err: any) => event.sender.send(`llm:error:${id}`, err?.message ?? String(err)))
-      .finally(() => chatControllers.delete(id))
+    Promise.resolve()
+      .then(() => {
+        if (!request.active()) return ""
+        return llm.chatStream(message, (t) => send(`llm:token:${id}`, t), request.signal)
+      })
+      .then((full) => send(`llm:done:${id}`, full))
+      .catch((err: any) => send(`llm:error:${id}`, err?.message ?? String(err)))
+      .finally(() => request.finish())
   })
-  ipcMain.on("llm:chatCancel", (_e, id: number) => {
-    chatControllers.get(id)?.abort()
-    chatControllers.delete(id)
+  ipcMain.on("llm:chatCancel", (event, id: unknown) => {
+    if (validRequestId(id)) requests.cancel(event.sender, `chat:${id}`)
   })
 }

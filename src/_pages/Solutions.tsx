@@ -1,17 +1,10 @@
 // Solutions.tsx
-import React, { useState, useEffect, useRef } from "react"
+import React, { useState, useEffect } from "react"
 import { useQuery, useQueryClient } from "react-query"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { dracula } from "react-syntax-highlighter/dist/esm/styles/prism"
 
 import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
-import {
-  Toast,
-  ToastDescription,
-  ToastMessage,
-  ToastTitle,
-  ToastVariant,
-} from "../components/ui/toast"
 import { ProblemStatementData } from "../types/solutions"
 import SolutionCommands from "../components/Solutions/SolutionCommands"
 import { ContentSection, ComplexitySection } from "../components/Solutions/ContentSection"
@@ -64,9 +57,9 @@ interface SolutionsProps {
 }
 const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
   const queryClient = useQueryClient()
-  const contentRef = useRef<HTMLDivElement>(null)
 
   const [debugProcessing, setDebugProcessing] = useState(false)
+  const [hasDebugResult, setHasDebugResult] = useState(() => Boolean(queryClient.getQueryData(["new_solution"])))
   const [problemStatementData, setProblemStatementData] = useState<ProblemStatementData | null>(
     null
   )
@@ -76,32 +69,15 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
   const [timeComplexityData, setTimeComplexityData] = useState<string | null>(null)
   const [spaceComplexityData, setSpaceComplexityData] = useState<string | null>(null)
 
-  const [toastOpen, setToastOpen] = useState(false)
-  const [toastMessage, setToastMessage] = useState<ToastMessage>({
-    title: "",
-    description: "",
-    variant: "neutral",
-  })
+  const [failure, setFailure] = useState<string | null>(null)
+  const [solutionPending, setSolutionPending] = useState(!queryClient.getQueryData(["solution"]))
 
-  const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const [tooltipHeight, setTooltipHeight] = useState(0)
-
-  const [isResetting, setIsResetting] = useState(false)
-
-  const { data: extraScreenshots = [], refetch } = useQuery<
+  const { data: extraScreenshots = [], refetch, error: screenshotsError, isFetching } = useQuery<
     Array<{ path: string; preview: string }>,
     Error
   >(
     ["extras"],
-    async () => {
-      try {
-        const existing = await window.electronAPI.getScreenshots()
-        return existing
-      } catch (error) {
-        console.error("Error loading extra screenshots:", error)
-        return []
-      }
-    },
+    () => window.electronAPI.getScreenshots(),
     {
       staleTime: QUERY_STALE_TIME,
       cacheTime: QUERY_CACHE_TIME,
@@ -110,79 +86,51 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
     }
   )
 
-  const showToast = (title: string, description: string, variant: ToastVariant) => {
-    setToastMessage({ title, description, variant })
-    setToastOpen(true)
-  }
-
   const handleDeleteExtraScreenshot = async (index: number) => {
     const screenshotToDelete = extraScreenshots[index]
-
+    if (!screenshotToDelete) return
+    setFailure(null)
     try {
       const response = await window.electronAPI.deleteScreenshot(screenshotToDelete.path)
 
       if (response.success) {
         refetch() // Refetch screenshots instead of managing state directly
       } else {
-        console.error("Failed to delete extra screenshot:", response.error)
+        setFailure("Could not delete the screenshot. Try deleting it again.")
       }
     } catch (error) {
+      setFailure("Could not delete the screenshot. Try deleting it again.")
       console.error("Error deleting extra screenshot:", error)
     }
   }
 
-  // Dimension sync — depends on tooltip state, so re-runs on toggle.
-  useEffect(() => {
-    const updateDimensions = () => {
-      if (contentRef.current) {
-        let contentHeight = contentRef.current.scrollHeight
-        const contentWidth = contentRef.current.scrollWidth
-        if (isTooltipVisible) {
-          contentHeight += tooltipHeight
-        }
-        window.electronAPI.updateContentDimensions({
-          width: contentWidth,
-          height: contentHeight,
-        })
-      }
-    }
-    const resizeObserver = new ResizeObserver(updateDimensions)
-    if (contentRef.current) {
-      resizeObserver.observe(contentRef.current)
-    }
-    updateDimensions()
-    return () => resizeObserver.disconnect()
-  }, [isTooltipVisible, tooltipHeight])
-
+  // App owns content sizing. SolutionCommands no longer has an overflowing tooltip.
   // IPC listeners — registered ONCE, decoupled from tooltip state.
   useEffect(() => {
     const cleanupFunctions = [
       window.electronAPI.onScreenshotTaken(() => refetch()),
       window.electronAPI.onResetView(() => {
-        // Set resetting state first
-        setIsResetting(true)
-
-        // Clear the queries
+        setFailure(null)
+        setSolutionPending(false)
+        setIsStreamingAnalysis(false)
+        setDebugProcessing(false)
         queryClient.removeQueries(["solution"])
         queryClient.removeQueries(["new_solution"])
-
-        // Reset other states
+        setHasDebugResult(false)
         refetch()
-
-        // After a small delay, clear the resetting state
-        setTimeout(() => {
-          setIsResetting(false)
-        }, 0)
       }),
       // Add streaming screenshot analysis listener
       window.electronAPI.onScreenshotAnalysisStream((data: any) => {
         console.log("[Solutions] Received streaming analysis update:", data)
         setProblemStatementData(data)
         setIsStreamingAnalysis(data.isStreaming || false)
+        setSolutionPending(data.isStreaming || false)
         queryClient.setQueryData(["problem_statement"], data)
       }),
       window.electronAPI.onSolutionStart(() => {
         // Reset UI state for a new solution.
+        setFailure(null)
+        setSolutionPending(true)
         setSolutionData(null)
         setThoughtsData(null)
         setTimeComplexityData(null)
@@ -190,11 +138,10 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
       }),
       //if there was an error processing the initial solution
       window.electronAPI.onSolutionError((error: string) => {
-        showToast(
-          "Processing Failed",
-          "There was an error processing your extra screenshots.",
-          "error"
-        )
+        setFailure("Processing failed. Capture another screenshot and try again using the commands above.")
+        setSolutionPending(false)
+        setIsStreamingAnalysis(false)
+        setDebugProcessing(false)
         // Reset solutions in the cache (even though this shouldn't ever happen) and complexities to previous states
         const solution = queryClient.getQueryData(["solution"]) as {
           code: string
@@ -202,9 +149,6 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
           time_complexity: string
           space_complexity: string
         } | null
-        if (!solution) {
-          setView("queue") //make sure that this is correct. or like make sure there's a toast or something
-        }
         setSolutionData(solution?.code || null)
         setThoughtsData(solution?.thoughts || null)
         setTimeComplexityData(solution?.time_complexity || null)
@@ -213,12 +157,13 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
       }),
       //when the initial solution is generated, we'll set the solution data to that
       window.electronAPI.onSolutionSuccess((data) => {
+        setSolutionPending(false)
+        setIsStreamingAnalysis(false)
         if (!data?.solution) {
-          console.warn("Received empty or invalid solution data")
+          setFailure("No solution was returned. Capture another screenshot and try again.")
           return
         }
-
-        console.log({ solution: data.solution })
+        setFailure(null)
 
         const solutionData = {
           code: data.solution.code,
@@ -238,23 +183,30 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
       //DEBUG EVENTS
       //########################################################
       window.electronAPI.onDebugStart(() => {
-        //we'll set the debug processing state to true and use that to render a little loader
+        setFailure(null)
         setDebugProcessing(true)
       }),
       //the first time debugging works, we'll set the view to debug and populate the cache with the data
       window.electronAPI.onDebugSuccess((data) => {
-        console.log({ debug_data: data })
-
-        queryClient.setQueryData(["new_solution"], data.solution)
         setDebugProcessing(false)
+        if (!data?.solution) {
+          setFailure("No debug result was returned. Try debugging again.")
+          return
+        }
+        setFailure(null)
+        queryClient.setQueryData(["new_solution"], data.solution)
+        setHasDebugResult(true)
       }),
       //when there was an error in the initial debugging, we'll show a toast and stop the little generating pulsing thing.
       window.electronAPI.onDebugError(() => {
-        showToast("Processing Failed", "There was an error debugging your code.", "error")
+        setFailure("Debugging failed. Your previous result is unchanged. Try debugging again.")
         setDebugProcessing(false)
       }),
       window.electronAPI.onProcessingNoScreenshots(() => {
-        showToast("No Screenshots", "There are no extra screenshots to process.", "neutral")
+        setFailure("There are no screenshots to process. Capture a screenshot and try again.")
+        setSolutionPending(false)
+        setIsStreamingAnalysis(false)
+        setDebugProcessing(false)
       }),
     ]
 
@@ -265,11 +217,22 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
 
   useEffect(() => {
     setProblemStatementData(queryClient.getQueryData(["problem_statement"]) || null)
-    setSolutionData(queryClient.getQueryData(["solution"]) || null)
+    const cached = queryClient.getQueryData<{
+      code: string; thoughts: string[]; time_complexity: string; space_complexity: string
+    }>(["solution"])
+    setSolutionData(cached?.code ?? null)
+    setThoughtsData(cached?.thoughts ?? null)
+    setTimeComplexityData(cached?.time_complexity ?? null)
+    setSpaceComplexityData(cached?.space_complexity ?? null)
 
     const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
       if (event?.query.queryKey[0] === "problem_statement") {
-        setProblemStatementData(queryClient.getQueryData(["problem_statement"]) || null)
+        const problem = queryClient.getQueryData<ProblemStatementData & { isStreaming?: boolean }>(["problem_statement"])
+        setProblemStatementData(problem || null)
+        if (typeof problem?.isStreaming === "boolean") {
+          setIsStreamingAnalysis(problem.isStreaming)
+          setSolutionPending(problem.isStreaming)
+        }
       }
       if (event?.query.queryKey[0] === "solution") {
         const solution = queryClient.getQueryData(["solution"]) as {
@@ -288,28 +251,28 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
     return () => unsubscribe()
   }, [queryClient])
 
-  const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
-    setIsTooltipVisible(visible)
-    setTooltipHeight(height)
-  }
-
   return (
     <>
-      {!isResetting && queryClient.getQueryData(["new_solution"]) ? (
+      {hasDebugResult ? (
         <>
           <Debug isProcessing={debugProcessing} setIsProcessing={setDebugProcessing} />
         </>
       ) : (
-        <div ref={contentRef} className="relative space-y-3 px-4 py-3" data-overlay-interactive>
-          <Toast
-            open={toastOpen}
-            onOpenChange={setToastOpen}
-            variant={toastMessage.variant}
-            duration={3000}
-          >
-            <ToastTitle>{toastMessage.title}</ToastTitle>
-            <ToastDescription>{toastMessage.description}</ToastDescription>
-          </Toast>
+        <div className="relative space-y-3 px-4 py-3" data-overlay-interactive>
+          {failure && (
+            <div role="alert" className="inline-failure">
+              <p>{failure}</p>
+              <button type="button" className="mt-2 underline" onClick={() => setView("queue")}>Return to queue</button>
+            </div>
+          )}
+          {screenshotsError && (
+            <div role="alert" className="inline-failure">
+              <p>Could not load screenshots. Your saved results are still available.</p>
+              <button type="button" className="mt-2 underline" disabled={isFetching} onClick={() => void refetch()}>
+                {isFetching ? "Retrying…" : "Retry loading screenshots"}
+              </button>
+            </div>
+          )}
 
           {/* Conditionally render the screenshot queue if solutionData is available */}
           {solutionData && (
@@ -329,7 +292,6 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
           {/* Navbar of commands with the SolutionsHelper */}
           <SolutionCommands
             extraScreenshots={extraScreenshots}
-            onTooltipVisibilityChange={handleTooltipVisibilityChange}
           />
 
           {/* Main Content - Modified width constraints */}
@@ -358,10 +320,10 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
                           : "Problem Statement"
                       }
                       content={problemStatementData?.problem_statement}
-                      isLoading={!problemStatementData}
+                      isLoading={solutionPending && !problemStatementData}
                     />
                     {/* Show loading state when waiting for solution */}
-                    {problemStatementData && !solutionData && (
+                    {solutionPending && problemStatementData && !solutionData && (
                       <div className="mt-4 flex">
                         <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
                           {problemStatementData?.output_format?.subtype === "voice"

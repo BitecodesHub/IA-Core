@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { RefreshCw, ShieldCheck, Wifi } from "lucide-react"
 import type { AiProviderSettings } from "../../types/settings"
 import { PINNED_PROVIDER_ENDPOINTS } from "../../../electron/config/schema"
@@ -68,6 +68,20 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
   )
   const [apiKeyDraft, setApiKeyDraft] = useState("")
   const [keyMsg, setKeyMsg] = useState<string | null>(null)
+  const [savingKey, setSavingKey] = useState(false)
+  const savingKeyRef = useRef(false)
+  const keyRequest = useRef(0)
+  const draftRevision = useRef(0)
+
+  useEffect(() => {
+    setApiKeyDraft("")
+    setKeyMsg(null)
+    setSavingKey(false)
+    savingKeyRef.current = false
+    draftRevision.current++
+    return () => { keyRequest.current++ }
+  }, [provider.id])
+
   const [testMsg, setTestMsg] = useState<{
     kind: "ok" | "warn" | "err" | "testing"
     msg?: string
@@ -81,20 +95,43 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
   const params = PARAMS.filter((p) => matchesSetting(p.label, search))
 
   const saveKey = async () => {
+    if (savingKeyRef.current) return
+    savingKeyRef.current = true
+    setSavingKey(true)
+    setKeyMsg(null)
+    const request = ++keyRequest.current
+    const revision = draftRevision.current
     try {
       const res = await window.electronAPI.setAiProviderApiKey(provider.id, apiKeyDraft)
+      if (request !== keyRequest.current) return
       setKeyMsg(res.ok ? "API key stored." : (res.error ?? "Failed to store key."))
-      setApiKeyDraft("")
-      await refresh()
+      if (res.ok) {
+        // Even an edit back to the submitted text is a newer draft, not ours to clear.
+        if (revision === draftRevision.current) setApiKeyDraft("")
+        await refresh()
+      }
     } catch (err: any) {
-      setKeyMsg(err?.message ?? "Failed to store key.")
+      if (request === keyRequest.current) setKeyMsg(err?.message ?? "Failed to store key.")
+    } finally {
+      if (request === keyRequest.current) {
+        savingKeyRef.current = false
+        setSavingKey(false)
+      }
     }
   }
 
+  const connectionRequest = useRef(0)
+  useEffect(() => {
+    setTestMsg(null)
+    return () => { connectionRequest.current++ }
+  }, [provider.id])
+
   const test = async () => {
+    const request = ++connectionRequest.current
     setTestMsg({ kind: "testing" })
     try {
       const res = await window.electronAPI.testLlmConnection(provider.id)
+      if (request !== connectionRequest.current) return
       setTestMsg(
         !res.success
           ? { kind: "err", msg: res.error }
@@ -103,9 +140,10 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
             : { kind: "ok", msg: "Connected — configured models are available." }
       )
     } catch (err: any) {
+      if (request !== connectionRequest.current) return
       setTestMsg({ kind: "err", msg: err?.message ?? "Connection failed." })
     }
-    await refresh()
+    if (request === connectionRequest.current) await refresh()
   }
 
   const statusLine = (() => {
@@ -263,12 +301,20 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
               type="password"
               aria-label={`${provider.name} API key`}
               value={apiKeyDraft}
-              onChange={(e) => setApiKeyDraft(e.target.value)}
+              onChange={(e) => {
+                draftRevision.current++
+                setApiKeyDraft(e.target.value)
+                setKeyMsg(null)
+              }}
               placeholder={secret?.hasApiKey ? "API key stored" : "API key"}
               className="flex-1 bg-black border border-white/30 rounded px-1.5 py-1 text-xs"
             />
-            <button className="text-xs px-2 py-1 rounded border border-white/40" onClick={saveKey}>
-              Save
+            <button
+              className="text-xs px-2 py-1 rounded border border-white/40"
+              onClick={saveKey}
+              disabled={savingKey}
+            >
+              {savingKey ? "Saving…" : "Save"}
             </button>
           </div>
           <div className="flex items-center gap-1 text-[11px] text-white/70">
@@ -282,7 +328,7 @@ const ProviderSection: React.FC<ProviderSectionProps> = ({
           {PROVIDER_KEY_HELP[provider.id] && (
             <div className="text-[10px] text-white/50">{PROVIDER_KEY_HELP[provider.id]}</div>
           )}
-          {keyMsg && <div className="text-[10px] text-amber-300">{keyMsg}</div>}
+          {keyMsg && <div role="status" className="text-[10px] text-amber-300">{keyMsg}</div>}
         </div>
       )}
 

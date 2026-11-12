@@ -356,6 +356,7 @@ export class BedrockProvider implements LlmProvider {
   ) {}
 
   private headers(json = true): Record<string, string> {
+    if (!bedrockRegionOf(this.config.endpoint)) throw new Error("Invalid Bedrock runtime endpoint.")
     const key = this.getApiKey()
     return {
       ...(json ? { "Content-Type": "application/json" } : {}),
@@ -370,6 +371,7 @@ export class BedrockProvider implements LlmProvider {
 
   private async getJson(url: string): Promise<any> {
     const res = await fetch(url, {
+      redirect: "error",
       headers: this.headers(false),
       signal: AbortSignal.timeout(Math.min(this.config.timeoutMs, 30_000)),
     })
@@ -465,6 +467,7 @@ export class BedrockProvider implements LlmProvider {
     try {
       const res = await fetch(url, {
         method: "POST",
+        redirect: "error",
         headers: this.headers(),
         body: JSON.stringify(buildConverseBody(request, params)),
         signal: ctl.signal,

@@ -36,12 +36,7 @@ export class WindowHelper {
   private windowSize: { width: number; height: number } | null = null
   private appState: AppState
 
-  // Initialize with explicit number type
-  private screenWidth: number = 0
-  private screenHeight: number = 0
   private step: number = 50 // pixels per move action; overridden from settings
-  private currentX: number = 0
-  private currentY: number = 0
   private settings = SettingsService.getInstance()
 
   constructor(appState: AppState) {
@@ -73,81 +68,27 @@ export class WindowHelper {
    */
   public setWindowDimensions(width: number, height: number, center = false): void {
     if (!this.mainWindow || this.mainWindow.isDestroyed()) return
-    // Each time a gate appears it starts centred; only a drag made while the
-    // gate is showing keeps it where the user put it.
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return
+    // A newly appearing gate centres once; later user placement is preserved.
     if (center && !this.gateShowing) this.gateMovedByUser = false
     this.gateShowing = center
-
-    if (center) {
-      const area = screen.getDisplayMatching(this.mainWindow.getBounds()).workArea
-      if (this.gateMovedByUser) {
-        // The user dragged the card somewhere: resize in place (kept on
-        // screen) instead of snapping it back to the middle.
-        const [cx, cy] = this.mainWindow.getPosition()
-        const w = Math.min(Math.ceil(width), area.width)
-        const h = Math.min(Math.ceil(height), area.height)
-        const x = Math.min(Math.max(cx, area.x), area.x + area.width - w)
-        const y = Math.min(Math.max(cy, area.y), area.y + area.height - h)
-        this.mainWindow.setBounds({ x, y, width: w, height: h })
-        this.windowPosition = { x, y }
-        this.windowSize = { width: w, height: h }
-        this.currentX = x
-        this.currentY = y
-        return
-      }
-      const w = Math.min(Math.ceil(width), area.width)
-      const h = Math.min(Math.ceil(height), area.height)
-      const x = area.x + Math.floor((area.width - w) / 2)
-      const y = area.y + Math.floor((area.height - h) / 2)
-      this.mainWindow.setBounds({ x, y, width: w, height: h })
-      this.windowPosition = { x, y }
-      this.windowSize = { width: w, height: h }
-      this.currentX = x
-      this.currentY = y
-      return
-    }
-
-    // Get current window position
-    const [currentX, currentY] = this.mainWindow.getPosition()
-
-    // Get screen dimensions
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const workArea = primaryDisplay.workAreaSize
-
-    // Use 75% width if debugging has occurred, otherwise use 60%
-    const maxAllowedWidth = Math.floor(
-      workArea.width * (this.appState.getHasDebugged() ? 0.75 : 0.5)
+    const current = this.mainWindow.getBounds()
+    const area = screen.getDisplayMatching(current).workArea
+    const maxWidth = center ? area.width : Math.floor(
+      area.width * (this.appState.getHasDebugged() ? 0.75 : 0.5)
     )
-
-    // Ensure width doesn't exceed max allowed width and height is reasonable
-    const newWidth = Math.min(width + 32, maxAllowedWidth)
-    const newHeight = Math.ceil(height)
-
-    // Center the window horizontally if it would go off screen
-    const maxX = workArea.width - newWidth
-    const newX = Math.min(Math.max(currentX, 0), maxX)
-
-    // Update window bounds
-    this.mainWindow.setBounds({
-      x: newX,
-      y: currentY,
-      width: newWidth,
-      height: newHeight,
-    })
-
-    // Update internal state
-    this.windowPosition = { x: newX, y: currentY }
-    this.windowSize = { width: newWidth, height: newHeight }
-    this.currentX = newX
+    const w = Math.min(Math.max(300, Math.ceil(width + (center ? 0 : 32))), maxWidth)
+    const h = Math.min(Math.max(200, Math.ceil(height)), area.height)
+    this.applyBounds(this.clampToVisibleArea({
+      x: center && !this.gateMovedByUser ? area.x + Math.floor((area.width - w) / 2) : current.x,
+      y: center && !this.gateMovedByUser ? area.y + Math.floor((area.height - h) / 2) : current.y,
+      width: w,
+      height: h,
+    }, area))
   }
 
   public createWindow(): void {
     if (this.mainWindow !== null) return
-
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const workArea = primaryDisplay.workAreaSize
-    this.screenWidth = workArea.width
-    this.screenHeight = workArea.height
 
     const winCfg = this.settings.get("window")
     this.step = this.settings.get("shortcuts").moveStep
@@ -318,8 +259,6 @@ export class WindowHelper {
     const bounds = this.mainWindow.getBounds()
     this.windowPosition = { x: bounds.x, y: bounds.y }
     this.windowSize = { width: bounds.width, height: bounds.height }
-    this.currentX = bounds.x
-    this.currentY = bounds.y
 
     this.setupWindowListeners()
     this.isWindowVisible = !this.settings.get("general").startMinimized
@@ -351,8 +290,6 @@ export class WindowHelper {
       if (this.mainWindow) {
         const bounds = this.mainWindow.getBounds()
         this.windowPosition = { x: bounds.x, y: bounds.y }
-        this.currentX = bounds.x
-        this.currentY = bounds.y
         schedulePersist()
       }
     })
@@ -407,7 +344,7 @@ export class WindowHelper {
     }
 
     if (this.windowPosition && this.windowSize) {
-      this.mainWindow.setBounds(
+      this.applyBounds(
         this.clampToVisibleArea({
           x: this.windowPosition.x,
           y: this.windowPosition.y,
@@ -429,19 +366,26 @@ export class WindowHelper {
    * Clamp a window rectangle so it stays on a currently-connected display.
    * Prevents the overlay from restoring off-screen after a monitor is unplugged.
    */
-  private clampToVisibleArea(bounds: { x: number; y: number; width: number; height: number }): {
-    x: number
-    y: number
-    width: number
-    height: number
-  } {
-    const display = screen.getDisplayMatching(bounds) ?? screen.getPrimaryDisplay()
-    const area = display.workArea
-    const width = Math.min(bounds.width, area.width)
-    const height = Math.min(bounds.height, area.height)
-    const x = Math.min(Math.max(bounds.x, area.x), area.x + area.width - width)
-    const y = Math.min(Math.max(bounds.y, area.y), area.y + area.height - height)
+  private clampToVisibleArea(
+    bounds: Electron.Rectangle,
+    area = (screen.getDisplayMatching(bounds) ?? screen.getPrimaryDisplay()).workArea
+  ): Electron.Rectangle {
+    const width = Math.min(Math.max(1, Math.ceil(bounds.width)), area.width)
+    const height = Math.min(Math.max(1, Math.ceil(bounds.height)), area.height)
+    const x = Math.min(Math.max(Math.round(bounds.x), area.x), area.x + area.width - width)
+    const y = Math.min(Math.max(Math.round(bounds.y), area.y), area.y + area.height - height)
     return { x, y, width, height }
+  }
+
+  private applyBounds(bounds: Electron.Rectangle): void {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) return
+    const current = this.mainWindow.getBounds()
+    if (current.x !== bounds.x || current.y !== bounds.y ||
+        current.width !== bounds.width || current.height !== bounds.height) {
+      this.mainWindow.setBounds(bounds)
+    }
+    this.windowPosition = { x: bounds.x, y: bounds.y }
+    this.windowSize = { width: bounds.width, height: bounds.height }
   }
 
   /** Apply live-updatable window settings without recreating the window. */
@@ -478,31 +422,14 @@ export class WindowHelper {
       return
     }
 
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const workArea = primaryDisplay.workAreaSize
-
-    // Get current window size or use defaults
-    const windowBounds = this.mainWindow.getBounds()
-    const windowWidth = windowBounds.width || 400
-    const windowHeight = windowBounds.height || 600
-
-    // Calculate center position
-    const centerX = Math.floor((workArea.width - windowWidth) / 2)
-    const centerY = Math.floor((workArea.height - windowHeight) / 2)
-
-    // Set window position
-    this.mainWindow.setBounds({
-      x: centerX,
-      y: centerY,
-      width: windowWidth,
-      height: windowHeight,
+    const current = this.mainWindow.getBounds()
+    const area = screen.getDisplayMatching(current).workArea
+    const bounds = this.clampToVisibleArea(current, area)
+    this.applyBounds({
+      ...bounds,
+      x: area.x + Math.floor((area.width - bounds.width) / 2),
+      y: area.y + Math.floor((area.height - bounds.height) / 2),
     })
-
-    // Update internal state
-    this.windowPosition = { x: centerX, y: centerY }
-    this.windowSize = { width: windowWidth, height: windowHeight }
-    this.currentX = centerX
-    this.currentY = centerY
   }
 
   public centerAndShowWindow(): void {
@@ -524,60 +451,15 @@ export class WindowHelper {
     if (isDev) console.log(`Window centered and shown`)
   }
 
-  // New methods for window movement
-  public moveWindowRight(): void {
-    if (!this.mainWindow) return
-
-    const windowWidth = this.windowSize?.width || 0
-    const halfWidth = windowWidth / 2
-
-    // Ensure currentX and currentY are numbers
-    this.currentX = Number(this.currentX) || 0
-    this.currentY = Number(this.currentY) || 0
-
-    this.currentX = Math.min(this.screenWidth - halfWidth, this.currentX + this.step)
-    this.mainWindow.setPosition(Math.round(this.currentX), Math.round(this.currentY))
+  private moveWindow(dx: number, dy: number): void {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) return
+    const bounds = this.mainWindow.getBounds()
+    this.applyBounds(this.clampToVisibleArea({ ...bounds, x: bounds.x + dx, y: bounds.y + dy }))
+    if (this.gateShowing) this.gateMovedByUser = true
   }
 
-  public moveWindowLeft(): void {
-    if (!this.mainWindow) return
-
-    const windowWidth = this.windowSize?.width || 0
-    const halfWidth = windowWidth / 2
-
-    // Ensure currentX and currentY are numbers
-    this.currentX = Number(this.currentX) || 0
-    this.currentY = Number(this.currentY) || 0
-
-    this.currentX = Math.max(-halfWidth, this.currentX - this.step)
-    this.mainWindow.setPosition(Math.round(this.currentX), Math.round(this.currentY))
-  }
-
-  public moveWindowDown(): void {
-    if (!this.mainWindow) return
-
-    const windowHeight = this.windowSize?.height || 0
-    const halfHeight = windowHeight / 2
-
-    // Ensure currentX and currentY are numbers
-    this.currentX = Number(this.currentX) || 0
-    this.currentY = Number(this.currentY) || 0
-
-    this.currentY = Math.min(this.screenHeight - halfHeight, this.currentY + this.step)
-    this.mainWindow.setPosition(Math.round(this.currentX), Math.round(this.currentY))
-  }
-
-  public moveWindowUp(): void {
-    if (!this.mainWindow) return
-
-    const windowHeight = this.windowSize?.height || 0
-    const halfHeight = windowHeight / 2
-
-    // Ensure currentX and currentY are numbers
-    this.currentX = Number(this.currentX) || 0
-    this.currentY = Number(this.currentY) || 0
-
-    this.currentY = Math.max(-halfHeight, this.currentY - this.step)
-    this.mainWindow.setPosition(Math.round(this.currentX), Math.round(this.currentY))
-  }
+  public moveWindowRight(): void { this.moveWindow(this.step, 0) }
+  public moveWindowLeft(): void { this.moveWindow(-this.step, 0) }
+  public moveWindowDown(): void { this.moveWindow(0, this.step) }
+  public moveWindowUp(): void { this.moveWindow(0, -this.step) }
 }

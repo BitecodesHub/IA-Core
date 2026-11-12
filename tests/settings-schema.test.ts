@@ -3,10 +3,33 @@ import {
   coerceSettings,
   coerceEndpoint,
   coerceProviderEndpoint,
+  coerceProviderSettings,
   DEFAULT_SETTINGS,
   isKnownAction,
   isKnownLocalAction,
 } from "../electron/config/schema"
+import { deepMerge, diffPaths } from "../electron/config/merge"
+
+describe("settings merge boundaries", () => {
+  it("strips reserved keys recursively from both inputs without mutating them", () => {
+    const base = JSON.parse('{"ai":{"providers":{"__proto__":{"polluted":true},"custom":{"name":"Old"}}}}')
+    const patch = JSON.parse('{"ai":{"providers":{"custom":{"name":"New","constructor":{"prototype":{"polluted":true}}},"prototype":{}}},"newSection":{"__proto__":{"polluted":true},"safe":1}}')
+    const before = JSON.stringify([base, patch])
+    const merged = deepMerge(base, patch)
+    expect(merged).toEqual({ ai: { providers: { custom: { name: "New" } } }, newSection: { safe: 1 } })
+    expect(JSON.stringify([base, patch])).toBe(before)
+    expect(Object.getPrototypeOf(merged)).toBe(Object.prototype)
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false)
+    expect(diffPaths(base, merged)).toEqual(["ai.providers.custom.name", "newSection"])
+  })
+
+  it("does not treat inherited values as merge overrides or unchanged own fields", () => {
+    const patch = Object.create({ endpoint: "https://attacker.invalid" })
+    expect(deepMerge({ endpoint: "https://www.bitecodes.com" }, patch)).toEqual({ endpoint: "https://www.bitecodes.com" })
+    expect(deepMerge(Object.create({ endpoint: "https://attacker.invalid" }), {})).toEqual({})
+    expect(diffPaths({ endpoint: "same" }, Object.create({ endpoint: "same" }))).toEqual(["endpoint"])
+  })
+})
 
 describe("coerceSettings", () => {
   it("returns full defaults for empty/garbage input", () => {
@@ -241,6 +264,67 @@ describe("OpenRouter online provider (defaults, offline default, endpoint pin)",
     })
     expect(s.ai.providers.ollama.endpoint).toBe("http://localhost:11434")
     expect(s.ai.providers.ollama.allowRemote).toBe(false)
+  })
+})
+
+describe("provider credential-slot boundaries", () => {
+  it.each(Object.entries(DEFAULT_SETTINGS.ai.providers))(
+    "keeps the identity, protocol and endpoint guard of managed slot %s",
+    (id, defaults) => {
+      const raw = {
+        id: "custom",
+        type: defaults.type === "openai-compatible" ? "bitecodes" : "openai-compatible",
+        endpoint: "https://attacker.invalid/v1",
+        allowRemote: true,
+      }
+      const expected = { id, type: defaults.type, endpoint: defaults.endpoint }
+      expect(coerceProviderSettings(id, raw)).toMatchObject(expected)
+      expect(coerceSettings({ ai: { providers: { [id]: raw } } }).ai.providers[id]).toMatchObject(expected)
+    }
+  )
+
+  it.each([
+    ["bitecodes", "https://api.bitecodes.com/", "https://api.bitecodes.com"],
+    ["bitecodes", "http://localhost:3000/", "http://localhost:3000"],
+    ["bedrock", "https://bedrock-runtime.us-east-1.amazonaws.com/", "https://bedrock-runtime.us-east-1.amazonaws.com"],
+  ])("allows a legitimate endpoint override for %s: %s", (id, endpoint, expected) => {
+    expect(coerceProviderSettings(id, { endpoint }).endpoint).toBe(expected)
+  })
+
+  it.each([
+    ["bitecodes", "https://bitecodes.com.attacker.invalid"],
+    ["bitecodes", "https://user:password@www.bitecodes.com"],
+    ["bitecodes", "http://www.bitecodes.com"],
+    ["bedrock", "https://bedrock-runtime.us-east-1.amazonaws.com.attacker.invalid"],
+    ["bedrock", "https://user:password@bedrock-runtime.us-east-1.amazonaws.com"],
+    ["bedrock", "http://bedrock-runtime.us-east-1.amazonaws.com"],
+  ])("rejects %s allowlist bypass %s even with a spoofed type", (id, endpoint) => {
+    const provider = coerceProviderSettings(id, { type: "openai-compatible", endpoint, allowRemote: true })
+    expect(provider.endpoint).toBe(DEFAULT_SETTINGS.ai.providers[id].endpoint)
+  })
+
+  it("keeps custom profiles configurable without letting an inner id claim a managed slot", () => {
+    expect(coerceProviderSettings("custom", {
+      id: "bitecodes", type: "openai-compatible", allowRemote: true, endpoint: "https://custom.invalid/v1",
+    })).toMatchObject({ id: "custom", type: "openai-compatible", endpoint: "https://custom.invalid/v1" })
+  })
+
+  it.each(["__proto__", "constructor", "prototype"])("rejects reserved credential slot %s", (id) => {
+    expect(() => coerceProviderSettings(id, {})).toThrow(/Invalid provider id/)
+    const settings = coerceSettings({ ai: {
+      activeProviderId: id, fallbackProviderIds: [id], providers: { [id]: { endpoint: "https://attacker.invalid" } },
+    } })
+    expect(Object.hasOwn(settings.ai.providers, id)).toBe(false)
+    expect(settings.ai.activeProviderId).toBe(DEFAULT_SETTINGS.ai.activeProviderId)
+    expect(settings.ai.fallbackProviderIds).not.toContain(id)
+  })
+
+  it("ignores inherited settings, provider entries and provider fields", () => {
+    expect(coerceSettings(Object.create({ ai: { activeProviderId: "ollama" } }))).toEqual(DEFAULT_SETTINGS)
+    const inheritedProvider = Object.create({ endpoint: "http://localhost:9999", enabled: false })
+    expect(coerceProviderSettings("bitecodes", inheritedProvider)).toEqual(DEFAULT_SETTINGS.ai.providers.bitecodes)
+    const providers = Object.create({ custom: { type: "openai-compatible" } })
+    expect(coerceSettings({ ai: { providers } }).ai.providers).toEqual(DEFAULT_SETTINGS.ai.providers)
   })
 })
 

@@ -11,6 +11,8 @@ import { useLocalShortcuts } from "../hooks/useLocalShortcuts"
 import { extractCodeBlocks } from "../lib/extractCode"
 import { parseMcqAnswer } from "../lib/mcqAnswer"
 
+let messageSequence = 0
+
 interface QueueProps {
   setView: React.Dispatch<React.SetStateAction<"queue" | "solutions" | "debug">>
 }
@@ -35,70 +37,55 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   const abortControllerRef = useRef<AbortController | null>(null)
-  const screenshotAbortControllerRef = useRef<AbortController | null>(null)
+  const screenshotRequestRef = useRef<{ id: string; messageId: number; controller: AbortController } | null>(null)
   // Ids of assistant messages already scanned for code (copied once, silently).
   const copiedCodeRef = useRef<Set<number>>(new Set())
   // Ids of assistant messages already scanned for an MCQ answer (hinted once).
   const hintedMcqRef = useRef<Set<number>>(new Set())
 
   const handleChatSend = async () => {
-    if (!chatInput.trim()) return
-    if (screenshotAbortControllerRef.current) return // screenshot analysis in progress
-
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-    }
-    abortControllerRef.current = new AbortController()
-
-    const userMsg: ChatMessage = { role: "user", text: chatInput, id: Date.now() }
-    const aiId = Date.now() + 1
-    setChatMessages((prev) => [
-      ...prev,
-      userMsg,
-      { role: "assistant", text: "", id: aiId, isStreaming: true },
-    ])
+    if (!chatInput.trim() || screenshotRequestRef.current) return
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+    const userMsg: ChatMessage = { role: "user", text: chatInput, id: ++messageSequence }
+    const aiId = ++messageSequence
+    setChatMessages((prev) => [...prev, userMsg, { role: "assistant", text: "", id: aiId, isStreaming: true }])
     setChatLoading(true)
     setChatInput("")
-
     try {
-      await streamChatResponse(chatInput, aiId, abortControllerRef.current.signal)
+      await streamChatResponse(chatInput, aiId, controller.signal)
     } catch (err: any) {
-      setChatMessages((prev) =>
-        prev.map((m) =>
-          m.id === aiId
-            ? {
-                ...m,
-                // Show WHY it failed (dead model, bad key, rate limit...) — a
-                // generic message made every failure look identical.
-                text: err.name === "AbortError" ? "Stopped" : formatProviderError(err?.message ?? err),
-                isStreaming: false,
-              }
-            : m
-        )
-      )
+      if (!controller.signal.aborted) {
+        setChatMessages((prev) => prev.map((m) => m.id === aiId
+          ? { ...m, text: [m.text, formatProviderError(err?.message ?? err)].filter(Boolean).join("\n\n"), isStreaming: false }
+          : m))
+      }
     } finally {
-      setChatLoading(false)
-      abortControllerRef.current = null
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null
+        setChatLoading(false)
+      }
     }
   }
 
-  const handleStopChat = async () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      setChatLoading(false)
+  const stopRequests = () => {
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    const request = screenshotRequestRef.current
+    screenshotRequestRef.current = null
+    if (request) {
+      request.controller.abort()
+      void window.electronAPI.cancelScreenshotProcessing(request.id).catch(() => {})
     }
-    if (screenshotAbortControllerRef.current) {
-      screenshotAbortControllerRef.current.abort()
-      try {
-        await window.electronAPI.cancelScreenshotProcessing()
-      } catch {}
-      setChatLoading(false)
-      setChatMessages((prev) =>
-        prev.map((m) =>
-          m.isStreaming ? { ...m, text: m.text + "\n\n⏹ Analysis stopped", isStreaming: false } : m
-        )
-      )
-    }
+  }
+
+  const handleStopChat = () => {
+    stopRequests()
+    setChatLoading(false)
+    setChatMessages((prev) => prev.map((m) => m.isStreaming
+      ? { ...m, text: m.text || "Stopped", isStreaming: false }
+      : m))
   }
 
   useLocalShortcuts(settings?.localShortcuts.bindings, {
@@ -135,89 +122,62 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 
     return new Promise<void>((resolve) => {
       let acc = ""
-      const cancel = window.electronAPI.chatStream(prompt, {
-        onToken: (t) => {
-          acc += t
-          setChatMessages((prev) =>
-            prev.map((m) => (m.id === messageId ? { ...m, text: acc, isStreaming: true } : m))
-          )
-        },
-        onDone: () => {
-          setChatMessages((prev) =>
-            prev.map((m) => (m.id === messageId ? { ...m, isStreaming: false } : m))
-          )
-          resolve()
-        },
-        onError: (error) => {
-          setChatMessages((prev) =>
-            prev.map((m) =>
-              m.id === messageId
-                ? { ...m, text: formatProviderError(error), isStreaming: false }
-                : m
-            )
-          )
-          resolve()
-        },
-      })
-
-      if (signal) {
-        if (signal.aborted) {
-          cancel()
-          resolve()
-        } else {
-          signal.addEventListener(
-            "abort",
-            () => {
-              cancel()
-              setChatMessages((prev) =>
-                prev.map((m) => (m.id === messageId ? { ...m, isStreaming: false } : m))
-              )
-              resolve()
-            },
-            { once: true }
-          )
-        }
+      let settled = false
+      let cancel = () => {}
+      const finish = (text: string) => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener("abort", abort)
+        setChatMessages((prev) => prev.map((m) => m.id === messageId
+          ? { ...m, text, isStreaming: false } : m))
+        resolve()
       }
+      const abort = () => {
+        cancel()
+        finish(acc || "Stopped")
+      }
+      if (signal?.aborted) { finish("Stopped"); return }
+      cancel = window.electronAPI.chatStream(prompt, {
+        onToken: (t) => {
+          if (settled || signal?.aborted) return
+          acc += t
+          const text = acc
+          setChatMessages((prev) => prev.map((m) => m.id === messageId
+            ? { ...m, text, isStreaming: true } : m))
+        },
+        onDone: (full) => finish(full || acc),
+        onError: (error) => finish([acc, formatProviderError(error)].filter(Boolean).join("\n\n")),
+      })
+      if (!settled) signal?.addEventListener("abort", abort, { once: true })
     })
   }
-
-  // Window dimension sync — a ResizeObserver reports content growth.
-  useEffect(() => {
-    const update = () => {
-      if (!contentRef.current) return
-      window.electronAPI.updateContentDimensions({
-        width: contentRef.current.scrollWidth,
-        height: contentRef.current.scrollHeight,
-      })
-    }
-    const ro = new ResizeObserver(update)
-    if (contentRef.current) ro.observe(contentRef.current)
-    update()
-    return () => ro.disconnect()
-  }, [])
 
   // IPC listeners — registered ONCE (not coupled to tooltip state, which would
   // tear them down and re-subscribe on every tooltip toggle).
   useEffect(() => {
     const cleanups = [
-      window.electronAPI.onResetView(() => refetch()),
-      window.electronAPI.onSolutionError((error: string) => {
-        // Stealth: no toast pop. Finalize any streaming placeholder in-place with a
-        // subtle, in-context message so it never hangs on "Generating response…".
-        const msg =
-          error ? formatProviderError(error) : "Could not process that. Try again."
-        setChatMessages((prev) => {
-          const hasStreaming = prev.some((m) => m.isStreaming && m.role === "assistant")
-          if (hasStreaming) {
-            return prev.map((m) =>
-              m.isStreaming && m.role === "assistant" ? { ...m, text: msg, isStreaming: false } : m
-            )
-          }
-          return [...prev, { role: "assistant" as const, text: msg, id: Date.now() }]
-        })
+      window.electronAPI.onResetView(() => {
+        stopRequests()
+        setChatMessages([])
+        setChatInput("")
         setChatLoading(false)
+        copiedCodeRef.current.clear()
+        hintedMcqRef.current.clear()
+        void refetch()
+      }),
+      window.electronAPI.onSolutionError((error: string, requestId?: string) => {
+        const request = screenshotRequestRef.current
+        if (requestId && request?.id !== requestId) return
+        const msg = error ? formatProviderError(error) : "Could not process that. Try again."
+        if (request) {
+          screenshotRequestRef.current = null
+          setChatMessages((prev) => prev.map((m) => m.id === request.messageId
+            ? { ...m, text: [m.text, msg].filter(Boolean).join("\n\n"), isStreaming: false } : m))
+          setChatLoading(false)
+        } else {
+          setChatMessages((prev) => [...prev, { role: "assistant", text: msg, id: ++messageSequence }])
+        }
         setView("queue")
-        console.error("Processing error:", error)
       }),
       window.electronAPI.onProcessingNoScreenshots(() => {
         // Nothing to process — stay silent (no pop).
@@ -243,126 +203,54 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     return () => cleanups.forEach((fn) => fn())
   }, [])
 
-  // Auto-screenshot-to-LLM flow
   useEffect(() => {
-    const unsub = window.electronAPI.onScreenshotTaken(async () => {
-      const updated = await refetch()
+    const unsub = window.electronAPI.onScreenshotTaken(async ({ path }) => {
+      stopRequests()
+      void refetch()
       setIsChatOpen(true)
-
-      const queue = updated?.data ?? []
-      const latest = queue.length > 0 ? queue[queue.length - 1]?.path : null
-      if (!latest) return
-
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort()
-        setChatLoading(false)
-      }
-      if (screenshotAbortControllerRef.current) {
-        screenshotAbortControllerRef.current.abort()
-      }
-
-      screenshotAbortControllerRef.current = new AbortController()
+      const request = { id: crypto.randomUUID(), messageId: ++messageSequence, controller: new AbortController() }
+      screenshotRequestRef.current = request
       setChatLoading(true)
       setChatMessages((prev) => [
-        ...prev,
-        {
-          role: "user" as const,
-          text: "📸 Analyzing screenshot…",
-          id: Date.now(),
-          screenshotPath: latest,
-        },
+        ...prev.map((m) => m.isStreaming ? { ...m, text: m.text || "Stopped", isStreaming: false } : m),
+        { role: "user", text: "Analyzing screenshot…", id: ++messageSequence, screenshotPath: path },
+        { role: "assistant", text: "", id: request.messageId, isStreaming: true },
       ])
-
       try {
-        const result = await window.electronAPI.processScreenshotWithChoice("answer")
-        if (!result.success) {
-          setChatMessages((prev) => [
-            ...prev,
-            {
-              role: "assistant" as const,
-              text: result.error ? formatProviderError(result.error) : "Couldn't analyze that. Try again.",
-              id: Date.now(),
-            },
-          ])
-        }
-      } catch {
-        setChatMessages((prev) => [
-          ...prev,
-          { role: "assistant" as const, text: "Couldn't analyze that. Try again.", id: Date.now() },
-        ])
+        const result = await window.electronAPI.processScreenshotWithChoice("answer", request.id)
+        if (!result.success) throw new Error(result.error || "Couldn't analyze that. Try again.")
+      } catch (error: any) {
+        if (screenshotRequestRef.current !== request) return
+        const text = formatProviderError(error?.message ?? error)
+        setChatMessages((prev) => prev.map((m) => m.id === request.messageId
+          ? { ...m, text: [m.text, text].filter(Boolean).join("\n\n"), isStreaming: false } : m))
       } finally {
-        screenshotAbortControllerRef.current = null
-        setChatLoading(false)
+        if (screenshotRequestRef.current === request) {
+          screenshotRequestRef.current = null
+          setChatLoading(false)
+          setChatMessages((prev) => prev.map((m) => m.id === request.messageId ? { ...m, isStreaming: false } : m))
+        }
       }
     })
-    return () => unsub?.()
-  }, [refetch])
-
-  // Screenshot analysis streaming
-  useEffect(() => {
-    const onStream = (data: any) => {
-      setIsChatOpen(true)
-      setChatLoading(true)
-      setChatMessages((prev) => {
-        const hasStreaming = prev.some((m) => m.isStreaming && m.role === "assistant")
-        if (hasStreaming) {
-          return prev.map((m) =>
-            m.isStreaming && m.role === "assistant"
-              ? { ...m, text: data.problem_statement, isStreaming: data.isStreaming }
-              : m
-          )
-        }
-        return [
-          ...prev,
-          {
-            role: "assistant" as const,
-            text: data.problem_statement,
-            id: Date.now(),
-            isStreaming: data.isStreaming,
-          },
-        ]
-      })
-    }
-
-    const onProblem = (data: any) => {
-      setIsChatOpen(true)
-      // The initial problem-extracted arrives with isStreaming:true and empty text.
-      // Treat it as a streaming placeholder (ChatPanel shows "Generating response…")
-      // so Claude's multi-second vision latency never looks frozen. Only the FINAL
-      // event (isStreaming:false) finalizes the single bubble and re-enables input.
-      const streaming = Boolean(data.isStreaming)
-      setChatMessages((prev) => {
-        const hasStreaming = prev.some((m) => m.isStreaming && m.role === "assistant")
-        if (hasStreaming) {
-          return prev.map((m) =>
-            m.isStreaming && m.role === "assistant"
-              ? { ...m, text: data.problem_statement, isStreaming: streaming }
-              : m
-          )
-        }
-        return [
-          ...prev,
-          {
-            role: "assistant" as const,
-            text: data.problem_statement,
-            id: Date.now(),
-            isStreaming: streaming,
-          },
-        ]
-      })
-      if (!streaming) {
-        screenshotAbortControllerRef.current = null
+    const onUpdate = (data: { requestId: string; problem_statement: string; isStreaming: boolean }) => {
+      const request = screenshotRequestRef.current
+      if (!request || request.id !== data.requestId || request.controller.signal.aborted) return
+      setChatMessages((prev) => prev.map((m) => m.id === request.messageId
+        ? { ...m, text: data.problem_statement, isStreaming: data.isStreaming } : m))
+      if (!data.isStreaming) {
+        screenshotRequestRef.current = null
         setChatLoading(false)
       }
     }
-
-    const unsubStream = window.electronAPI.onScreenshotAnalysisStream(onStream)
-    const unsubProblem = window.electronAPI.onProblemExtracted(onProblem)
+    const unsubStream = window.electronAPI.onScreenshotAnalysisStream(onUpdate)
+    const unsubProblem = window.electronAPI.onProblemExtracted(onUpdate)
     return () => {
-      unsubStream?.()
-      unsubProblem?.()
+      unsub()
+      unsubStream()
+      unsubProblem()
+      stopRequests()
     }
-  }, [])
+  }, [refetch])
 
   // Silently copy generated code to the clipboard the moment a response finishes.
   // No UI, no toast, no focus change — the code is just made available to paste.

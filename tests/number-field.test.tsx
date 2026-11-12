@@ -1,6 +1,7 @@
 import React, { useState } from "react"
 import { describe, it, expect } from "vitest"
 import { render, screen, fireEvent } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import NumberField from "../src/components/ui/NumberField"
 
 function Harness({ min, max, step }: { min: number; max: number; step: number }) {
@@ -14,6 +15,27 @@ function Harness({ min, max, step }: { min: number; max: number; step: number })
 }
 
 describe("NumberField clamping", () => {
+  it("discards Escape without committing the draft on blur", async () => {
+    const user = userEvent.setup()
+    render(<Harness min={0} max={2} step={0.1} />)
+    const input = screen.getByLabelText("Temp")
+    await user.clear(input)
+    await user.type(input, "1.7{Escape}")
+    expect(screen.getByTestId("v")).toHaveTextContent("1")
+    expect(input).toHaveValue(1)
+    expect(input).not.toHaveFocus()
+  })
+
+  it("commits Enter once and does not retain the draft after blur", async () => {
+    const user = userEvent.setup()
+    render(<Harness min={0} max={2} step={0.1} />)
+    const input = screen.getByLabelText("Temp")
+    await user.clear(input)
+    await user.type(input, "1.7{Enter}")
+    expect(screen.getByTestId("v")).toHaveTextContent("1.7")
+    expect(input).toHaveValue(1.7)
+    expect(input).not.toHaveFocus()
+  })
   it("clamps an over-max value on blur", () => {
     render(<Harness min={0} max={2} step={0.1} />)
     const input = screen.getByLabelText("Temp") as HTMLInputElement

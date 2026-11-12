@@ -119,7 +119,7 @@ afterEach(() => {
 
 function createMainWindow() {
   mocks.dockVisible = settings.window.skipTaskbar
-  const helper = new WindowHelper({} as ConstructorParameters<typeof WindowHelper>[0])
+  const helper = new WindowHelper({ getHasDebugged: () => false } as ConstructorParameters<typeof WindowHelper>[0])
   helper.createWindow()
   return { helper, win: windows[0] }
 }
@@ -153,6 +153,30 @@ function expectMacSettings(win: MockWindow) {
 }
 
 describe("WindowHelper", () => {
+  it.each([-1600, 1440])("keeps resizing on a secondary display starting at x=%i", (x) => {
+    const { helper, win } = createMainWindow()
+    const area = { x, y: 120, width: 1600, height: 800 }
+    mocks.screen.getDisplayMatching.mockReturnValue({ workArea: area })
+    win.bounds = { x: x + 100, y: 200, width: 400, height: 400 }
+    helper.setWindowDimensions(5000, 5000)
+    expect(win.bounds).toEqual({ x: x + 100, y: 120, width: 800, height: 800 })
+    const calls = win.setBounds.mock.calls.length
+    helper.setWindowDimensions(5000, 5000)
+    expect(win.setBounds).toHaveBeenCalledTimes(calls)
+    helper.centerAndShowWindow()
+    expect(win.bounds.x).toBe(x + 400)
+  })
+
+  it("rejects invalid dimensions without changing bounds", () => {
+    const { helper, win } = createMainWindow()
+    const previous = { ...win.bounds }
+    win.setBounds.mockClear()
+    helper.setWindowDimensions(NaN, 400)
+    helper.setWindowDimensions(400, Infinity)
+    helper.setWindowDimensions(0, 400)
+    expect(win.bounds).toEqual(previous)
+    expect(win.setBounds).not.toHaveBeenCalled()
+  })
   it("creates a Notes window without weakening Electron security", () => {
     const { win } = createMainWindow()
     expect(mocks.BrowserWindow).toHaveBeenCalledWith(
