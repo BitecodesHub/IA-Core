@@ -14,11 +14,14 @@ const mocks = vi.hoisted(() => ({
     streamImageAnalysis: vi.fn(),
     generateSolution: vi.fn(),
     debugSolutionWithImages: vi.fn(),
+    analyzeAudioFromBase64: vi.fn(),
+    chat: vi.fn(),
   },
   resize: vi.fn(async () => Buffer.from("synthetic-image")),
+  settings: vi.fn(() => ({ autoAnalyze: true })),
 }))
 vi.mock("../electron/LLMHelper", () => ({ LLMHelper: vi.fn(() => mocks.llm) }))
-vi.mock("../electron/config/SettingsService", () => ({ SettingsService: {} }))
+vi.mock("../electron/config/SettingsService", () => ({ SettingsService: { getInstance: () => ({ get: mocks.settings }) } }))
 vi.mock("../electron/image/resize", () => ({ toResizedJpeg: mocks.resize }))
 
 function deferred<T>() {
@@ -34,6 +37,8 @@ let view: "queue" | "solutions"
 let contents: EventEmitter & { send: ReturnType<typeof vi.fn> }
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.settings.mockReset().mockReturnValue({ autoAnalyze: true })
+  mocks.llm.chat.mockReset()
   mocks.llm.ensureVisionModel.mockImplementation(async () => {})
   mocks.resize.mockImplementation(async () => Buffer.from("synthetic-image"))
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "notes-processing-"))
@@ -57,6 +62,58 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+describe("audio transcript latency", () => {
+  it("publishes recognition immediately instead of waiting for summary", async () => {
+    vi.useFakeTimers()
+    const start = Date.now()
+    mocks.llm.analyzeAudioFromBase64.mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 400))
+      return { text: "Synthetic speech", timestamp: Date.now() }
+    })
+    mocks.llm.chat.mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 2400))
+      return "**Summary**"
+    })
+    let visibleAt = 0
+    const early = vi.fn(() => { visibleAt = Date.now() - start })
+    const result = helper.processAudioBase64("synthetic", "audio/webm", early, new AbortController().signal)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(early).toHaveBeenCalledWith(expect.objectContaining({ text: "Synthetic speech", analyzing: true }))
+    expect(visibleAt).toBe(400)
+    await vi.advanceTimersByTimeAsync(2400)
+    expect(await result).toMatchObject({ text: "Synthetic speech", analysis: "**Summary**" })
+    console.log(JSON.stringify({ measurement: "synthetic ASR 400ms + summary 2400ms", baselineVisibleTranscriptMs: Date.now() - start, visibleTranscriptMs: visibleAt }))
+  })
+
+  it.each(["disabled", "empty", "failed", "cancelled"])("preserves audio ownership and optional analysis: %s", async mode => {
+    const controller = new AbortController()
+    const early = vi.fn()
+    mocks.llm.analyzeAudioFromBase64.mockResolvedValueOnce({ text: mode === "empty" ? "  " : "Synthetic speech", timestamp: 1 })
+    mocks.settings.mockReturnValueOnce({ autoAnalyze: mode !== "disabled" })
+    mocks.llm.chat.mockImplementationOnce(async () => {
+      if (mode === "cancelled") controller.abort()
+      throw new Error("Summary unavailable")
+    })
+    const result = helper.processAudioBase64("synthetic", "audio/webm", early, controller.signal)
+    if (mode === "cancelled") await expect(result).rejects.toMatchObject({ name: "AbortError" })
+    else await expect(result).resolves.toMatchObject({ text: mode === "empty" ? "  " : "Synthetic speech" })
+    if (mode === "disabled" || mode === "empty") expect(mocks.llm.chat).not.toHaveBeenCalled()
+    else expect(mocks.llm.chat.mock.calls[0][1]).toBe(controller.signal)
+  })
+
+  it("does not publish transcription after cancellation", async () => {
+    const pending = deferred<{ text: string; timestamp: number }>()
+    mocks.llm.analyzeAudioFromBase64.mockReturnValueOnce(pending.promise)
+    const controller = new AbortController()
+    const early = vi.fn()
+    const result = helper.processAudioBase64("synthetic", "audio/webm", early, controller.signal)
+    controller.abort()
+    pending.resolve({ text: "Late speech", timestamp: 1 })
+    await expect(result).rejects.toMatchObject({ name: "AbortError" })
+    expect(early).not.toHaveBeenCalled()
+  })
 })
 
 describe("screenshot processing ownership", () => {

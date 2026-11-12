@@ -52,8 +52,10 @@ interface ElectronAPI {
   moveWindowDown: () => Promise<void>
   analyzeAudioFromBase64: (
     data: string,
-    mimeType: string
-  ) => Promise<{ text: string; timestamp: number }>
+    mimeType: string,
+    progress: { id: string; onTranscribed: (result: { text: string; timestamp: number; analyzing: boolean }) => void }
+  ) => Promise<{ text: string; analysis?: string; timestamp: number }>
+  cancelAudioTranscription: (id: string) => void
   analyzeAudioFile: (path: string) => Promise<{ text: string; timestamp: number }>
   getImageBase64: (path: string) => Promise<string>
   quitApp: () => Promise<void>
@@ -156,6 +158,8 @@ export const PROCESSING_EVENTS = {
 } as const
 
 // Expose the Electron API to the renderer process
+const audioSubscriptions = new Map<string, () => void>()
+
 contextBridge.exposeInMainWorld("electronAPI", {
   updateContentDimensions: (dimensions: { width: number; height: number; center?: boolean }) =>
     ipcRenderer.invoke("update-content-dimensions", dimensions),
@@ -263,8 +267,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
   moveWindowRight: () => ipcRenderer.invoke("move-window-right"),
   moveWindowUp: () => ipcRenderer.invoke("move-window-up"),
   moveWindowDown: () => ipcRenderer.invoke("move-window-down"),
-  analyzeAudioFromBase64: (data: string, mimeType: string) =>
-    ipcRenderer.invoke("analyze-audio-base64", data, mimeType),
+  analyzeAudioFromBase64: async (data: string, mimeType: string, progress: Parameters<ElectronAPI["analyzeAudioFromBase64"]>[2]) => {
+    const channel = `audio:transcribed:${progress.id}`
+    const subscription = (_: unknown, result: { text: string; timestamp: number; analyzing: boolean }) => progress.onTranscribed(result)
+    const cleanup = () => {
+      ipcRenderer.removeListener(channel, subscription)
+      audioSubscriptions.delete(progress.id)
+    }
+    audioSubscriptions.set(progress.id, cleanup)
+    ipcRenderer.once(channel, subscription)
+    try {
+      return await ipcRenderer.invoke("analyze-audio-base64", data, mimeType, progress.id)
+    } finally {
+      cleanup()
+    }
+  },
+  cancelAudioTranscription: (id: string) => {
+    audioSubscriptions.get(id)?.()
+    ipcRenderer.send("audio:cancel", id)
+  },
   analyzeAudioFile: (path: string) => ipcRenderer.invoke("analyze-audio-file", path),
   getImageBase64: (path: string) => ipcRenderer.invoke("get-image-base64", path),
   quitApp: () => ipcRenderer.invoke("quit-app"),

@@ -159,37 +159,41 @@ export class ProcessingHelper {
     this.appState.setHasDebugged(false)
   }
 
-  public async processAudioBase64(data: string, mimeType: string) {
-    return this.handleAudio(() => this.llmHelper.analyzeAudioFromBase64(data, mimeType))
+  public async processAudioBase64(
+    data: string,
+    mimeType: string,
+    onTranscribed: (result: { text: string; timestamp: number; analyzing: boolean }) => void,
+    signal: AbortSignal
+  ) {
+    return this.handleAudio(() => this.llmHelper.analyzeAudioFromBase64(data, mimeType, signal), onTranscribed, signal)
   }
 
   public async processAudioFile(filePath: string) {
     return this.handleAudio(() => this.llmHelper.analyzeAudioFile(filePath))
   }
 
-  /**
-   * Transcription (Bitecodes server-side Whisper, local whisper.cpp as a
-   * fallback), then an optional analysis of the transcript by the active model.
-   * Transcript and analysis stay separate fields so the UI can format them;
-   * failures throw so the caller can show a real error instead of fake text.
-   */
   private async handleAudio(
-    run: () => Promise<{ text: string; timestamp: number }>
+    run: () => Promise<{ text: string; timestamp: number }>,
+    onTranscribed?: (result: { text: string; timestamp: number; analyzing: boolean }) => void,
+    signal?: AbortSignal
   ): Promise<{ text: string; analysis?: string; timestamp: number }> {
     const { text } = await run()
-    if (!text) return { text: "", timestamp: Date.now() }
-
-    const audioCfg = SettingsService.getInstance().get("audio")
-    if (!audioCfg.autoAnalyze) return { text, timestamp: Date.now() }
+    signal?.throwIfAborted()
+    const timestamp = Date.now()
+    const analyzing = Boolean(text.trim()) && SettingsService.getInstance().get("audio").autoAnalyze
+    onTranscribed?.({ text, timestamp, analyzing })
+    if (!analyzing) return { text, timestamp }
 
     try {
       const analysis = await this.llmHelper.chat(
-        `The following is a transcript of an audio clip. Summarize it briefly and suggest possible next actions.\n\nTranscript:\n${text}`
+        `The following is a transcript of an audio clip. Summarize it briefly and suggest possible next actions.\n\nTranscript:\n${text}`,
+        signal
       )
-      return { text, analysis, timestamp: Date.now() }
+      signal?.throwIfAborted()
+      return { text, analysis, timestamp }
     } catch {
-      // Transcription succeeded but analysis failed (e.g. Ollama offline).
-      return { text, timestamp: Date.now() }
+      signal?.throwIfAborted()
+      return { text, timestamp }
     }
   }
 

@@ -216,18 +216,21 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   })
 
-  // IPC handler for analyzing audio from base64 data
-  ipcMain.handle("analyze-audio-base64", async (event, data: unknown, mimeType: unknown) => {
-    try {
-      if (typeof data !== "string" || typeof mimeType !== "string") {
-        throw new Error("Invalid audio payload.")
-      }
-      const result = await appState.processingHelper.processAudioBase64(data, mimeType)
-      return result
-    } catch (error: any) {
-      console.error("Error in analyze-audio-base64 handler:", error)
-      throw error
+  ipcMain.handle("analyze-audio-base64", async (event, data: unknown, mimeType: unknown, id: unknown) => {
+    if (typeof data !== "string" || typeof mimeType !== "string" || !validRequestId(id)) {
+      throw new Error("Invalid audio payload.")
     }
+    const request = requests.begin(event.sender, `audio:${id}`)
+    try {
+      return await appState.processingHelper.processAudioBase64(data, mimeType, result => {
+        if (request.active()) event.sender.send(`audio:transcribed:${id}`, result)
+      }, request.signal)
+    } finally {
+      request.finish()
+    }
+  })
+  ipcMain.on("audio:cancel", (event, id: unknown) => {
+    if (validRequestId(id)) requests.cancel(event.sender, `audio:${id}`)
   })
 
   // IPC handler for analyzing audio from file path

@@ -224,6 +224,18 @@ describe("hosted-model error messages hide internals", () => {
 })
 
 describe("voice transcription via Bitecodes", () => {
+  it("forwards request cancellation to the transcription fetch", async () => {
+    const controller = new AbortController()
+    let received!: AbortSignal
+    const fetchImpl = vi.fn(async (_url, init) => {
+      received = init.signal
+      controller.abort()
+      received.throwIfAborted()
+      return new Response()
+    })
+    await expect(transcribeWithBitecodes(BITECODES_DEFAULT_ENDPOINT, "synthetic", "QUJD", "audio/webm", { fetchImpl: fetchImpl as any, signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" })
+    expect(received.aborted).toBe(true)
+  })
   it("posts the recording and returns the transcript", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true, text: "hello" }), { status: 200 }))
     const text = await transcribeWithBitecodes(BITECODES_DEFAULT_ENDPOINT, "bcd_x", "QUJD", "audio/webm;codecs=opus", {

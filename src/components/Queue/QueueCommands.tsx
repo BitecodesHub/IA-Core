@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react"
 import { IoLogOutOutline } from "react-icons/io5"
 import { AlertTriangle, Check, Copy, Loader2, Mic, Settings, Square, X } from "lucide-react"
 import bitecodesLogo from "../../assets/bitecodes-logo.png"
+import MessageRenderer from "../ui/MessageRenderer"
 
 interface QueueCommandsProps {
   screenshots: Array<{ path: string; preview: string }>
@@ -16,6 +17,7 @@ type VoicePhase = "idle" | "acquiring" | "recording" | "transcribing"
 interface Transcript {
   text: string
   analysis?: string
+  analyzing?: boolean
   at: number
   duration: number
 }
@@ -97,6 +99,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   const rafRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const requestRef = useRef(0)
+  const audioRequestRef = useRef<string | null>(null)
   const busyRef = useRef(false)
   const mountedRef = useRef(true)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -116,6 +119,8 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 
   const invalidateRecording = useCallback(() => {
     requestRef.current++
+    if (audioRequestRef.current) window.electronAPI.cancelAudioTranscription(audioRequestRef.current)
+    audioRequestRef.current = null
     busyRef.current = false
     const rec = recorderRef.current
     recorderRef.current = null
@@ -142,6 +147,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 
   const cancelRecording = useCallback(() => {
     invalidateRecording()
+    setTranscript(current => current ? { ...current, analyzing: false } : null)
     setPhase("idle")
     setElapsed(0)
     setLevel(0)
@@ -176,10 +182,29 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
     timerRef.current = setInterval(() => {
       if (id === requestRef.current) setElapsed(Math.floor((Date.now() - startedAt) / 1000))
     }, 500)
+    let transcribed = false
     try {
       const base64 = await blobToBase64(blob)
       if (id !== requestRef.current) return
-      const result = await window.electronAPI.analyzeAudioFromBase64(base64, blob.type)
+      const audioId = crypto.randomUUID()
+      audioRequestRef.current = audioId
+      const result = await window.electronAPI.analyzeAudioFromBase64(base64, blob.type, {
+        id: audioId,
+        onTranscribed: (early) => {
+          if (id !== requestRef.current || !early.text.trim()) return
+          transcribed = true
+          setTranscript({
+            text: early.text.trim(),
+            analyzing: early.analyzing,
+            at: early.timestamp,
+            duration: Math.max(1, Math.round(seconds)),
+          })
+          releaseMic()
+          busyRef.current = false
+          setPhase("idle")
+          setElapsed(0)
+        },
+      })
       if (id !== requestRef.current) return
       const text = (result?.text ?? "").trim()
       if (!text) {
@@ -191,16 +216,18 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
         setTranscript({
           text,
           analysis: result?.analysis?.trim() || undefined,
-          at: Date.now(),
+          at: result.timestamp,
           duration: Math.max(1, Math.round(seconds)),
         })
         setVoiceError(null)
       }
     } catch (err) {
       if (id !== requestRef.current) return
-      setVoiceError(friendlyVoiceError(cleanIpcError(err)))
+      if (!transcribed) setVoiceError(friendlyVoiceError(cleanIpcError(err)))
     } finally {
       if (id === requestRef.current) {
+        setTranscript(current => current?.analyzing ? { ...current, analyzing: false } : current)
+        audioRequestRef.current = null
         releaseMic()
         busyRef.current = false
         setPhase("idle")
@@ -225,6 +252,8 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   const startRecording = useCallback(async () => {
     // React state has not necessarily rendered before a second activation.
     if (busyRef.current || !mountedRef.current) return
+    invalidateRecording()
+    setTranscript(current => current ? { ...current, analyzing: false } : null)
     busyRef.current = true
     const id = ++requestRef.current
     setPhase("acquiring")
@@ -316,7 +345,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
       cancelRecording()
       setVoiceError({ kind: "mic", message: "Could not start recording on this device. Please try again." })
     }
-  }, [cancelRecording, finalizeRecording, stopRecording])
+  }, [cancelRecording, finalizeRecording, stopRecording, invalidateRecording])
 
   // Bubble after focused controls, but before the window-level app shortcuts.
   useEffect(() => {
@@ -721,7 +750,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
               </button>
               <button
                 className="voice-icon-btn"
-                onClick={() => setTranscript(null)}
+                onClick={() => { if (phase === "idle") cancelRecording(); setTranscript(null) }}
                 type="button"
                 title="Dismiss"
                 aria-label="Dismiss transcript"
@@ -734,14 +763,14 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             <p className="select-text whitespace-pre-wrap break-words text-[13px] leading-relaxed text-white">
               {transcript.text}
             </p>
-            {transcript.analysis && (
+            {(transcript.analysis || transcript.analyzing) && (
               <div className="mt-2.5 border-t border-white/15 pt-2">
                 <span className="text-[10px] font-semibold uppercase tracking-wide text-white/50">
                   Summary
                 </span>
-                <p className="mt-1 select-text whitespace-pre-wrap break-words text-xs leading-relaxed text-white/75">
-                  {transcript.analysis}
-                </p>
+                <div className="mt-1 select-text break-words text-xs leading-relaxed text-white/75">
+                  {transcript.analyzing ? <span role="status">Preparing summary…</span> : <MessageRenderer text={transcript.analysis!} />}
+                </div>
               </div>
             )}
           </div>

@@ -251,12 +251,14 @@ try {
   }
 
   // --- Voice ------------------------------------------------------------------
-  const voice = await page(`window.electronAPI.analyzeAudioFromBase64("${wavBase64()}", "audio/wav").then((r) => r.text).catch((e) => "ERROR " + e)`)
+  const voice = await page(`window.electronAPI.analyzeAudioFromBase64("${wavBase64()}", "audio/wav", {id: crypto.randomUUID(), onTranscribed: () => {}}).then((r) => r.text).catch((e) => "ERROR " + e)`)
   check("voice recording transcribed", /hello from the mock transcriber/.test(voice ?? ""), String(voice).slice(0, 90))
   const voiceReq = sent("/api/v1/desktop/transcribe").at(-1)
   check("voice sent to Bitecodes", voiceReq?.mimeType === "audio/wav" && voiceReq.audioBytes > 30000, JSON.stringify(voiceReq ?? {}))
 
   if (sourceRoot) {
+    mock.behavior.summaryMarkdown = true
+    mock.behavior.streamDelayMs = 500
     await click("Record voice")
     const recording = await until(() => page(`!!document.querySelector('[aria-label="Stop recording and transcribe"]')`), 5000, 100)
     check("Record starts the synthetic microphone", !!recording)
@@ -264,6 +266,12 @@ try {
     await click("Stop recording and transcribe")
     const transcript = await until(() => page(`document.body.innerText.includes('hello from the mock transcriber')`), 10000, 100)
     check("Record/Stop displays the transcript", !!transcript)
+    check("transcript appears while summary is still pending", await page(`document.body.innerText.includes('Preparing summary…') && !!document.querySelector('[aria-label="Record voice"]')`))
+    check("voice summary renders bold and lists without Markdown markers", !!await until(() => page(`Array.from(document.querySelectorAll('strong')).some(el => el.textContent === 'Brief Summary') && Array.from(document.querySelectorAll('li')).some(el => el.textContent === 'Learn Java') && !document.body.innerText.includes('**Brief Summary**')`), 10000, 100))
+    const voicePng = await win(`w.webContents.capturePage().then(img => img.toPNG().toString('base64'))`)
+    writeFileSync(join(tmpdir(), "notes-voice-summary.png"), Buffer.from(voicePng, "base64"))
+    mock.behavior.summaryMarkdown = false
+    mock.behavior.streamDelayMs = 15
     await click("Dismiss transcript")
     mock.behavior.transcriptionFailure = true
     await click("Record voice")
@@ -273,12 +281,18 @@ try {
     check("voice transcription failure appears inline", !!await until(() => page(`!!document.querySelector('[aria-label="Dismiss error"]')`), 10000, 100))
     await click("Dismiss error")
     mock.behavior.transcriptionFailure = false
+    mock.behavior.streamDelayMs = 500
     await click("Record voice")
     await until(() => page(`!!document.querySelector('[aria-label="Stop recording and transcribe"]')`), 5000, 100)
     await sleep(1200)
     await click("Stop recording and transcribe")
     check("voice recording retries after transcription failure", !!await until(() => page(`document.body.innerText.includes('hello from the mock transcriber')`), 10000, 100))
+    await main(`(() => { const r=globalThis.__testRequire; r(r('path').join(r('electron').app.getAppPath(),'dist-electron/main.js')).AppState.getInstance().processingHelper.cancelOngoingRequests(); })()`)
+    check("main-side summary cancellation retains text without a stuck indicator or error", !!await until(() => page(`document.body.innerText.includes('hello from the mock transcriber') && !document.body.innerText.includes('Preparing summary…') && !document.querySelector('[aria-label="Dismiss error"]')`), 5000, 100))
     await click("Dismiss transcript")
+    await sleep(700)
+    check("dismissing a voice transcript prevents late revival", await page(`!document.body.innerText.includes('hello from the mock transcriber') && !document.body.innerText.includes('Preparing summary…')`))
+    mock.behavior.streamDelayMs = 15
   }
 
   if (sourceRoot) {

@@ -99,6 +99,7 @@ describe("QueueCommands voice flow", () => {
         analysis: "Greet the caller back.",
         timestamp: Date.now(),
       })),
+      cancelAudioTranscription: vi.fn(),
       copyToClipboard: vi.fn(async () => ({ ok: true })),
       openPrivacySettings: vi.fn(async () => ({ ok: true })),
       quitApp: vi.fn(async () => {}),
@@ -145,6 +146,67 @@ describe("QueueCommands voice flow", () => {
     await user.click(screen.getByRole("button", { name: /dismiss transcript/i }))
     expect(screen.queryByText("Hello from the test mic.")).not.toBeInTheDocument()
   }, 15000)
+
+  it.each(["complete", "dismiss", "unmount", "record again"])("shows text before summary and owns late results: %s", async action => {
+    let finish!: (result: { text: string; analysis?: string; timestamp: number }) => void
+    let progress!: Parameters<Window["electronAPI"]["analyzeAudioFromBase64"]>[2]
+    api.analyzeAudioFromBase64.mockImplementation((_data, _mime, callbacks) => {
+      progress = callbacks
+      callbacks.onTranscribed({ text: "Literal **speech**", timestamp: Date.now(), analyzing: true })
+      return new Promise(resolve => { finish = resolve })
+    })
+    const user = userEvent.setup()
+    const view = renderBar()
+    await startRecording(user)
+    await act(() => sleep(850))
+    await user.click(screen.getByRole("button", { name: /stop recording and transcribe/i }))
+    expect(await screen.findByText("Literal **speech**")).toBeInTheDocument()
+    expect(screen.getByText("Preparing summary…")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /record voice/i })).toBeEnabled()
+    if (action === "dismiss") await user.click(screen.getByRole("button", { name: /dismiss transcript/i }))
+    if (action === "unmount") view.unmount()
+    if (action === "record again") await startRecording(user)
+    await act(async () => {
+      finish({ text: "Literal **speech**", analysis: "**Brief Summary**\n\n- Learn `Java`", timestamp: Date.now() })
+    })
+    if (action === "complete") {
+      expect(screen.getByText("Brief Summary").tagName).toBe("STRONG")
+      expect(screen.getByText("Java").tagName).toBe("CODE")
+      expect(screen.getByRole("listitem")).toHaveTextContent("Learn Java")
+    } else {
+      expect(api.cancelAudioTranscription).toHaveBeenCalledWith(progress.id)
+      expect(screen.queryByText("Brief Summary")).not.toBeInTheDocument()
+    }
+  })
+
+  it("dismissing a previous transcript does not stop a new recording", async () => {
+    const user = userEvent.setup()
+    renderBar()
+    await startRecording(user)
+    await act(() => sleep(850))
+    await user.click(screen.getByRole("button", { name: /stop recording and transcribe/i }))
+    expect(await screen.findByText("Hello from the test mic.")).toBeInTheDocument()
+    await startRecording(user)
+    await user.click(screen.getByRole("button", { name: /dismiss transcript/i }))
+    expect(screen.getByRole("button", { name: /stop recording and transcribe/i })).toBeInTheDocument()
+    expect(screen.queryByText("Hello from the test mic.")).not.toBeInTheDocument()
+  })
+
+  it.each(["unavailable", "cancelled"])("keeps the early transcript when summary is %s", async mode => {
+    api.analyzeAudioFromBase64.mockImplementation(async (_data, _mime, callbacks) => {
+      callbacks.onTranscribed({ text: "Recognized speech", timestamp: Date.now(), analyzing: true })
+      if (mode === "cancelled") throw new Error("This operation was aborted")
+      return { text: "Recognized speech", timestamp: Date.now() }
+    })
+    const user = userEvent.setup()
+    renderBar()
+    await startRecording(user)
+    await act(() => sleep(850))
+    await user.click(screen.getByRole("button", { name: /stop recording and transcribe/i }))
+    expect(await screen.findByText("Recognized speech")).toBeInTheDocument()
+    expect(screen.queryByText("Preparing summary…")).not.toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
 
   it("discards a recording via cancel without transcribing", async () => {
     const user = userEvent.setup()

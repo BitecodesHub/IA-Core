@@ -6,7 +6,7 @@ import http from "node:http"
 
 export function startMockBitecodes(port, { version = "0.0.0" } = {}) {
   const log = []
-  const behavior = { streamDelayMs: 15, assistantFailure: false, transcriptionFailure: false }
+  const behavior = { streamDelayMs: 15, assistantFailure: false, transcriptionFailure: false, summaryMarkdown: false }
   let revoked = false
   const TOKEN = "bcd_mock_token_for_tests"
   const origin = `http://127.0.0.1:${port}`
@@ -72,9 +72,9 @@ export function startMockBitecodes(port, { version = "0.0.0" } = {}) {
         const n = Array.isArray(body.images) ? body.images.length : 0
         const answer = n
           ? `MOCK-ANSWER: I can see ${n} screenshot(s). def solve(): return 42`
-          : `MOCK-ANSWER: chat works. Transcript summary ok.`
+          : behavior.summaryMarkdown ? `**Brief Summary**\n\n- Learn Java\n- Practice examples` : `MOCK-ANSWER: chat works. Transcript summary ok.`
         res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store" })
-        const parts = answer.match(/.{1,12}/g)
+        const parts = answer.match(/[\s\S]{1,12}/g)
         let i = 0
         let timer
         res.on("close", () => clearTimeout(timer))

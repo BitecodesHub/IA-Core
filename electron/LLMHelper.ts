@@ -823,7 +823,8 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
    * fallback for when Bitecodes cannot be reached; it needs whisper-cli and
    * ffmpeg, which normal installs do not have, so its error is not surfaced.
    */
-  public async analyzeAudioFromBase64(data: string, mimeType: string) {
+  public async analyzeAudioFromBase64(data: string, mimeType: string, signal?: AbortSignal) {
+    signal?.throwIfAborted()
     this.requireSignIn()
     if (!data) throw new Error("No audio was received. Record again and try again.")
     const config = this.settings.get("ai").providers.bitecodes
@@ -834,15 +835,22 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
         const text = await transcribeWithBitecodes(config.endpoint, token, data, mimeType, {
           client: notesClient(),
           onUnauthorized: BitecodesAuth.getInstance().revocationHandler(),
+          signal,
         })
+        signal?.throwIfAborted()
         return { text, timestamp: Date.now() }
       } catch (error: any) {
+        signal?.throwIfAborted()
         hostedError = error instanceof Error ? error : new Error(String(error))
       }
     }
+    signal?.throwIfAborted()
     try {
-      return await AudioService.getInstance().transcribeBase64(data, mimeType)
+      const result = await AudioService.getInstance().transcribeBase64(data, mimeType)
+      signal?.throwIfAborted()
+      return result
     } catch {
+      signal?.throwIfAborted()
       throw this.friendlyTranscribeError(hostedError)
     }
   }
@@ -858,8 +866,8 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
     return err
   }
 
-  public async chat(message: string): Promise<string> {
-    return this.generate(message, { stream: false, kind: "chat" })
+  public async chat(message: string, signal?: AbortSignal): Promise<string> {
+    return this.generate(message, { stream: false, kind: "chat", signal })
   }
 
   public async chatStream(
