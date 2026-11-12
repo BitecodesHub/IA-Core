@@ -819,6 +819,7 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
    */
   public async analyzeAudioFromBase64(data: string, mimeType: string) {
     this.requireSignIn()
+    if (!data) throw new Error("No audio was received. Record again and try again.")
     const config = this.settings.get("ai").providers.bitecodes
     const token = SecretStore.getInstance().getProviderApiKey("bitecodes")
     let hostedError: Error | null = null
@@ -836,8 +837,19 @@ IMPORTANT: Return ONLY the JSON object, without markdown formatting or code bloc
     try {
       return await AudioService.getInstance().transcribeBase64(data, mimeType)
     } catch {
-      throw hostedError ?? new Error("Voice transcription is not available right now.")
+      throw this.friendlyTranscribeError(hostedError)
     }
+  }
+
+  /** Raw fetch/timeout failures are not user-readable; say what happened instead. */
+  private friendlyTranscribeError(err: Error | null): Error {
+    if (!err) return new Error("Voice transcription is not available right now.")
+    const msg = err.message || String(err)
+    if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network/i.test(msg))
+      return new Error("Could not reach Bitecodes. Check your connection and try again.")
+    if (/timed?\s?out|aborted/i.test(msg))
+      return new Error("Transcription timed out. Try a shorter recording.")
+    return err
   }
 
   public async chat(message: string): Promise<string> {

@@ -48,7 +48,7 @@ export class ProcessingHelper {
             audioResult
           )
           this.appState.setProblemInfo({
-            problem_statement: audioResult.text,
+            problem_statement: audioResult.text || "No speech detected in the audio.",
             input_format: {},
             output_format: {},
             constraints: [],
@@ -145,30 +145,27 @@ export class ProcessingHelper {
 
   /**
    * Transcription (Bitecodes server-side Whisper, local whisper.cpp as a
-   * fallback), then an analysis of the transcript by the active model.
-   * Degrades to a clear message if either step is unavailable.
+   * fallback), then an optional analysis of the transcript by the active model.
+   * Transcript and analysis stay separate fields so the UI can format them;
+   * failures throw so the caller can show a real error instead of fake text.
    */
   private async handleAudio(
     run: () => Promise<{ text: string; timestamp: number }>
-  ): Promise<{ text: string; timestamp: number }> {
+  ): Promise<{ text: string; analysis?: string; timestamp: number }> {
+    const { text } = await run()
+    if (!text) return { text: "", timestamp: Date.now() }
+
+    const audioCfg = SettingsService.getInstance().get("audio")
+    if (!audioCfg.autoAnalyze) return { text, timestamp: Date.now() }
+
     try {
-      const { text } = await run()
-      if (!text) return { text: "No speech detected in the audio.", timestamp: Date.now() }
-
-      const audioCfg = SettingsService.getInstance().get("audio")
-      if (!audioCfg.autoAnalyze) return { text, timestamp: Date.now() }
-
-      try {
-        const analysis = await this.llmHelper.chat(
-          `The following is a transcript of an audio clip. Summarize it briefly and suggest possible next actions.\n\nTranscript:\n${text}`
-        )
-        return { text: `Transcript:\n${text}\n\n${analysis}`, timestamp: Date.now() }
-      } catch {
-        // Transcription succeeded but analysis failed (e.g. Ollama offline).
-        return { text: `Transcript:\n${text}`, timestamp: Date.now() }
-      }
-    } catch (error: any) {
-      return { text: `Audio processing failed: ${error?.message ?? error}`, timestamp: Date.now() }
+      const analysis = await this.llmHelper.chat(
+        `The following is a transcript of an audio clip. Summarize it briefly and suggest possible next actions.\n\nTranscript:\n${text}`
+      )
+      return { text, analysis, timestamp: Date.now() }
+    } catch {
+      // Transcription succeeded but analysis failed (e.g. Ollama offline).
+      return { text, timestamp: Date.now() }
     }
   }
 

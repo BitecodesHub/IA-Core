@@ -52,8 +52,8 @@ export interface ElectronAPI {
   analyzeAudioFromBase64: (
     data: string,
     mimeType: string
-  ) => Promise<{ text: string; timestamp: number }>
-  analyzeAudioFile: (path: string) => Promise<{ text: string; timestamp: number }>
+  ) => Promise<{ text: string; analysis?: string; timestamp: number }>
+  analyzeAudioFile: (path: string) => Promise<{ text: string; analysis?: string; timestamp: number }>
   getImageBase64: (path: string) => Promise<string>
   processScreenshotWithChoice: (
     analysisType: "analyze" | "answer"
