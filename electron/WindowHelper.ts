@@ -1,5 +1,5 @@
-import { BrowserWindow, screen } from "electron"
-import { AppState } from "main"
+import { app, BrowserWindow, screen } from "electron"
+import type { AppState } from "./main"
 import path from "node:path"
 import fs from "node:fs"
 import { SettingsService } from "./config/SettingsService"
@@ -153,7 +153,7 @@ export class WindowHelper {
     this.step = this.settings.get("shortcuts").moveStep
 
     const windowSettings: Electron.BrowserWindowConstructorOptions = {
-      title: "",
+      title: "Notes",
       width: winCfg.size.width,
       height: winCfg.size.height,
       minWidth: 300,
@@ -214,13 +214,6 @@ export class WindowHelper {
     // is over actual UI (see setIgnoreMouseEvents + the renderer's hover probe).
     this.mainWindow.setIgnoreMouseEvents(true, { forward: true })
 
-    if (process.platform === "darwin") {
-      this.mainWindow.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true,
-      })
-      this.mainWindow.setHiddenInMissionControl(winCfg.hiddenInMissionControl)
-      this.mainWindow.setAlwaysOnTop(winCfg.alwaysOnTop, "floating")
-    }
     if (process.platform === "linux") {
       // Linux-specific optimizations for better compatibility
       if (this.mainWindow.setHasShadow) {
@@ -229,8 +222,7 @@ export class WindowHelper {
       // Keep window focusable on Linux for proper interaction
       this.mainWindow.setFocusable(true)
     }
-    this.mainWindow.setSkipTaskbar(winCfg.skipTaskbar)
-    this.mainWindow.setAlwaysOnTop(winCfg.alwaysOnTop)
+    this.applyWindowSettings()
 
     let activeUrl = startUrl
     const loadAppUrl = () => {
@@ -313,7 +305,7 @@ export class WindowHelper {
         if (!this.settings.get("general").startMinimized) {
           this.mainWindow.show()
           this.mainWindow.focus()
-          this.mainWindow.setAlwaysOnTop(true)
+          this.mainWindow.setAlwaysOnTop(this.settings.get("window").alwaysOnTop)
           this.isWindowVisible = true
           if (isDev) console.log("Window is now visible and centered")
         } else {
@@ -428,7 +420,7 @@ export class WindowHelper {
     // Re-assert content protection: it can be reset by the OS across show/hide.
     this.mainWindow.setContentProtection(this.settings.get("window").contentProtection)
     this.mainWindow.show()
-    this.mainWindow.setAlwaysOnTop(true)
+    this.mainWindow.setAlwaysOnTop(this.settings.get("window").alwaysOnTop)
 
     this.isWindowVisible = true
   }
@@ -461,7 +453,15 @@ export class WindowHelper {
     this.mainWindow.setContentProtection(cfg.contentProtection)
     this.mainWindow.setSkipTaskbar(cfg.skipTaskbar)
     if (process.platform === "darwin") {
+      this.mainWindow.setVisibleOnAllWorkspaces(cfg.alwaysOnTop, {
+        visibleOnFullScreen: cfg.alwaysOnTop,
+      })
       this.mainWindow.setHiddenInMissionControl(cfg.hiddenInMissionControl)
+      if (app.dock && app.dock.isVisible() === cfg.skipTaskbar) {
+        app.setActivationPolicy(cfg.skipTaskbar ? "accessory" : "regular")
+        if (cfg.skipTaskbar) app.dock.hide()
+        else void app.dock.show()
+      }
     }
   }
 
@@ -518,7 +518,7 @@ export class WindowHelper {
     this.mainWindow.setContentProtection(this.settings.get("window").contentProtection)
     this.mainWindow.show()
     this.mainWindow.focus()
-    this.mainWindow.setAlwaysOnTop(true)
+    this.mainWindow.setAlwaysOnTop(this.settings.get("window").alwaysOnTop)
     this.isWindowVisible = true
 
     if (isDev) console.log(`Window centered and shown`)

@@ -309,16 +309,7 @@ export class ShortcutsHelper {
   private buildHandlers(): Record<ShortcutActionId, () => void> {
     const s = this.appState
     return {
-      toggleWindow: () => {
-        s.toggleMainWindow()
-        const win = s.getMainWindow()
-        if (win && !s.isVisible() && process.platform === "darwin") {
-          win.setAlwaysOnTop(true, "normal")
-          setTimeout(() => {
-            if (win && !win.isDestroyed()) win.setAlwaysOnTop(true, "floating")
-          }, 100)
-        }
-      },
+      toggleWindow: () => s.toggleMainWindow(),
       showWindow: () => s.centerAndShowWindow(),
       takeScreenshot: async () => {
         const win = s.getMainWindow()

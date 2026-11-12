@@ -260,6 +260,9 @@ export class AppState {
 
   public applyWindowSettings(): void {
     this.windowHelper.applyWindowSettings()
+    if (!SettingsService.getInstance().get("window").alwaysOnTop) {
+      this.hintOverlay.destroy()
+    }
   }
 
   public createTray(): void {
@@ -537,6 +540,8 @@ async function initializeApp() {
   app.on("activate", () => {
     if (appState.getMainWindow() === null) {
       appState.createWindow()
+    } else {
+      appState.showMainWindow()
     }
   })
 
@@ -557,10 +562,6 @@ async function initializeApp() {
   app.name = "Notes"
   process.title = "Notes"
 
-  app.dock?.hide() // Accessory app: no dock icon
-  if (process.platform === "darwin") {
-    app.setActivationPolicy("accessory")
-  }
   app.commandLine.appendSwitch("disable-background-timer-throttling")
   app.commandLine.appendSwitch("disable-renderer-backgrounding")
 }

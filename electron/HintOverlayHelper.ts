@@ -56,6 +56,10 @@ export class HintOverlayHelper {
 
   /** Blink dots for the given options. Invalid/empty selections are ignored. */
   public blink(letters: HintLetter[]): void {
+    if (!this.settings.get("window").alwaysOnTop) {
+      this.destroy()
+      return
+    }
     const valid = Array.from(new Set(letters)).filter((l): l is HintLetter =>
       (VALID_LETTERS as readonly string[]).includes(l)
     )
