@@ -384,7 +384,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
   }, [transcript])
 
   return (
-    <div className="w-fit p-1" data-overlay-interactive>
+      <div className="sticky top-0 z-[1000] w-fit shrink-0 p-1" data-overlay-interactive>
       <style>{`
         @keyframes border-flow {
           0% { background-position: 0% 50%; }
