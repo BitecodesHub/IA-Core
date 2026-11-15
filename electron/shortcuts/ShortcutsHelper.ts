@@ -45,14 +45,14 @@ export class ShortcutsHelper {
   constructor(appState: AppState) {
     this.appState = appState
     this.handlers = this.buildHandlers()
-    this.effective = resolveEffectiveBindings(this.settings.get("shortcuts").bindings)
+    this.effective = resolveEffectiveBindings(this.settings.get("shortcuts").bindings, process.platform)
   }
 
   /** Register every effective binding. Call once at startup. */
   applyAll(): RegistrationReport {
     globalShortcut.unregisterAll()
     this.osConflicts.clear()
-    this.effective = resolveEffectiveBindings(this.settings.get("shortcuts").bindings)
+    this.effective = resolveEffectiveBindings(this.settings.get("shortcuts").bindings, process.platform)
     this.appState.setMoveStep(this.settings.get("shortcuts").moveStep)
 
     for (const id of Object.keys(this.effective) as ShortcutActionId[]) {
@@ -69,6 +69,10 @@ export class ShortcutsHelper {
     const prev = this.effective[id]
     if (prev) globalShortcut.unregister(prev)
     this.osConflicts.delete(id)
+    if (SHORTCUT_ACTIONS[id].macOnly && process.platform !== "darwin") {
+      this.effective[id] = null
+      return { id, state: "unsupported" }
+    }
     this.effective[id] = accel
 
     if (accel === null) {
@@ -87,7 +91,7 @@ export class ShortcutsHelper {
   getSnapshot(): ShortcutsSnapshot {
     return {
       actions: SHORTCUT_ACTION_LIST,
-      defaults: DEFAULT_BINDINGS,
+      defaults: resolveEffectiveBindings({}, process.platform),
       effective: { ...this.effective },
       status: this.statusMap(),
       moveStep: this.settings.get("shortcuts").moveStep,
@@ -112,6 +116,9 @@ export class ShortcutsHelper {
 
   setShortcut(id: ShortcutActionId, accel: Binding): SetShortcutResult {
     if (!SHORTCUT_ACTIONS[id]) return { ok: false }
+    if (SHORTCUT_ACTIONS[id].macOnly && process.platform !== "darwin") {
+      return { ok: true, result: this.applyOne(id, null) }
+    }
 
     // Disabling is always allowed.
     if (accel === null) {
@@ -198,6 +205,10 @@ export class ShortcutsHelper {
         continue
       }
       const id = key as ShortcutActionId
+      if (SHORTCUT_ACTIONS[id].macOnly && process.platform !== "darwin") {
+        candidate[id] = null
+        continue
+      }
       const val = rawBindings[key]
       if (val === null) {
         candidate[id] = null
@@ -261,6 +272,7 @@ export class ShortcutsHelper {
   }
 
   private statusFor(id: ShortcutActionId): RegistrationStatus {
+    if (SHORTCUT_ACTIONS[id].macOnly && process.platform !== "darwin") return "unsupported"
     const accel = this.effective[id]
     if (accel === null || accel === undefined) return "disabled"
     if (this.osConflicts.has(id)) return "os-conflict"
@@ -329,6 +341,8 @@ export class ShortcutsHelper {
           })
         }
       },
+      analyzeSelectedText: () => { void s.textActions.analyze() },
+      pasteCopiedAnswer: () => { void s.textActions.paste() },
       process: async () => {
         await s.processingHelper.processScreenshots()
       },

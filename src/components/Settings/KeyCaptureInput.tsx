@@ -6,10 +6,11 @@ interface KeyCaptureInputProps {
   value: string | null
   /** Fires with the captured accelerator string when the user records one. */
   onCapture: (accelerator: string) => void
+  disabled?: boolean
 }
 
 /** Press-to-record accelerator input. */
-const KeyCaptureInput: React.FC<KeyCaptureInputProps> = ({ value, onCapture }) => {
+const KeyCaptureInput: React.FC<KeyCaptureInputProps> = ({ value, onCapture, disabled }) => {
   const [recording, setRecording] = useState(false)
 
   const handleKeyDown = useCallback(
@@ -33,6 +34,7 @@ const KeyCaptureInput: React.FC<KeyCaptureInputProps> = ({ value, onCapture }) =
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => setRecording((r) => !r)}
       onKeyDown={handleKeyDown}
       onBlur={() => setRecording(false)}

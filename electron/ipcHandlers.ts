@@ -150,12 +150,28 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Windows for "screen" because Windows has no such setting — the renderer
   // must not claim otherwise.
   ipcMain.handle("open-privacy-settings", async (_event, kind: unknown) => {
-    const target = kind === "microphone" ? "microphone" : "screen"
+    const target = kind === "accessibility" ? "accessibility" : kind === "microphone" ? "microphone" : "screen"
     return openPrivacySettings(target)
   })
 
   // Retained channel name for the existing renderer call site.
   ipcMain.handle("open-screen-recording-settings", async () => openPrivacySettings("screen"))
+
+  ipcMain.handle("text-action:claim", (event) => {
+    if (event.sender !== appState.getMainWindow()?.webContents) return null
+    return appState.textActions.claim()
+  })
+  ipcMain.on("text-action:cancel", (event) => {
+    if (event.sender === appState.getMainWindow()?.webContents) appState.textActions.cancel()
+  })
+  ipcMain.handle("text-action:accessibility", (event) => {
+    if (event.sender !== appState.getMainWindow()?.webContents) throw new Error("Access denied.")
+    return appState.macTextActions.status()
+  })
+  ipcMain.handle("text-action:request-accessibility", (event) => {
+    if (event.sender !== appState.getMainWindow()?.webContents) throw new Error("Access denied.")
+    return appState.macTextActions.requestPermission()
+  })
 
   // Silent clipboard write — used to auto-copy generated code from a completed
   // response. No UI, no focus change; runs entirely in the main process.
@@ -383,6 +399,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // the short confirmation code — never the device token.
   const bitecodes = BitecodesAuth.getInstance()
   bitecodes.onChange((state) => {
+    if (state.phase !== "signed-in") appState.textActions.cancel()
     // The token changed (signed in/out): drop cached discovery/health for it.
     appState.processingHelper.getLLMHelper().invalidateProviderCache("bitecodes")
     const win = appState.getMainWindow()
@@ -397,6 +414,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Update feed: state to the renderer (never the raw URL), download via main.
   const updates = UpdateChecker.getInstance()
   updates.onChange((state) => {
+    if (state.updateRequired) appState.textActions.cancel()
     const win = appState.getMainWindow()
     if (win && !win.isDestroyed()) win.webContents.send("update:changed", state)
   })

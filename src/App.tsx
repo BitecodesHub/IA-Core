@@ -140,6 +140,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const cleanupFunctions = [
+      window.electronAPI.onTextActionAvailable(({ openChat }) => {
+        if (openChat) setView("queue")
+      }),
       window.electronAPI.onSolutionStart(() => {
         setView("solutions")
         console.log("starting processing")

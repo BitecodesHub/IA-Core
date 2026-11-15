@@ -2,7 +2,7 @@ import type { ShortcutActionId, Binding } from "../config/schema"
 import type { ShortcutActionDef } from "./actions"
 import type { AcceleratorValidation, DuplicateGroup } from "./validation"
 
-export type RegistrationStatus = "active" | "disabled" | "os-conflict" | "duplicate"
+export type RegistrationStatus = "active" | "disabled" | "os-conflict" | "duplicate" | "unsupported"
 
 export interface RegistrationResult {
   id: ShortcutActionId

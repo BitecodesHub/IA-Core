@@ -18,6 +18,11 @@ function clone<T>(v: T): T {
 
 export function makeElectronAPIMock() {
   return {
+    onTextActionAvailable: vi.fn(() => () => {}),
+    claimTextAction: vi.fn(async () => null),
+    cancelTextAction: vi.fn(),
+    getTextAccessibility: vi.fn(async () => ({ supported: true, trusted: false })),
+    requestTextAccessibility: vi.fn(async () => ({ supported: true, trusted: false })),
     getSettings: vi.fn(async () => clone(DEFAULT_SETTINGS)),
     setSettings: vi.fn(async (_patch: unknown) => clone(DEFAULT_SETTINGS)),
     resetSettings: vi.fn(async () => clone(DEFAULT_SETTINGS)),

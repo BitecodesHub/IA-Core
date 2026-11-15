@@ -23,6 +23,8 @@ beforeEach(() => {
   cancelScreenshot = vi.fn().mockResolvedValue(undefined)
   const api: Record<string, any> = {
     cancelScreenshotProcessing: cancelScreenshot,
+    claimTextAction: vi.fn().mockResolvedValue(null),
+    cancelTextAction: vi.fn(),
     processScreenshotWithChoice: vi.fn((_type, id) => new Promise(resolve => requests.push({ id, resolve }))),
     chatStream: vi.fn((_prompt, callbacks) => {
       const cancel = vi.fn()
@@ -31,7 +33,7 @@ beforeEach(() => {
     }),
     copyToClipboard: vi.fn(), showMcqHint: vi.fn(),
   }
-  for (const name of ["onResetView", "onSolutionError", "onProcessingNoScreenshots", "onScreenshotError", "onScreenshotTaken", "onScreenshotAnalysisStream", "onProblemExtracted"]) {
+  for (const name of ["onTextActionAvailable", "onResetView", "onSolutionError", "onProcessingNoScreenshots", "onScreenshotError", "onScreenshotTaken", "onScreenshotAnalysisStream", "onProblemExtracted"]) {
     api[name] = (callback: (...args: any[]) => any) => {
       state.listeners[name] = callback
       return vi.fn(() => { delete state.listeners[name] })
@@ -54,6 +56,65 @@ function update(id: string, text: string, isStreaming = true) {
 }
 
 describe("Queue request lifecycle", () => {
+  it("analyzes a selected-text action in chat while preserving the input draft", async () => {
+    const user = userEvent.setup()
+    render(<Queue setView={vi.fn()} />)
+    await user.click(screen.getByRole("button", { name: "Chat" }))
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "unfinished draft")
+    vi.mocked(window.electronAPI.claimTextAction).mockResolvedValueOnce({ id: "selection-id", kind: "selection", text: "Synthetic selected paragraph" })
+    await act(async () => state.listeners.onTextActionAvailable({ openChat: true }))
+    expect(window.electronAPI.chatStream).toHaveBeenCalledWith("Analyze this selected text:\n\nSynthetic selected paragraph", expect.any(Object))
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("unfinished draft")
+    await act(async () => streams[0].onDone("Selected text explanation"))
+    expect(screen.getByText("Selected text explanation")).toBeInTheDocument()
+  })
+
+  it("keeps a pending action through React StrictMode effect replay", async () => {
+    vi.mocked(window.electronAPI.claimTextAction).mockResolvedValueOnce({ id: "strict-id", kind: "selection", text: "StrictMode synthetic text" })
+    await act(async () => { render(<React.StrictMode><Queue setView={vi.fn()} /></React.StrictMode>) })
+    expect(window.electronAPI.claimTextAction).toHaveBeenCalledOnce()
+    expect(window.electronAPI.chatStream).toHaveBeenCalledOnce()
+    await act(async () => streams[0].onDone("Complete"))
+  })
+
+  it("claims selections that arrived before Queue mounted", async () => {
+    vi.mocked(window.electronAPI.claimTextAction).mockResolvedValueOnce({ id: "pending-id", kind: "selection", text: "Pending synthetic text" })
+    await act(async () => { render(<Queue setView={vi.fn()} />) })
+    expect(window.electronAPI.chatStream).toHaveBeenCalledOnce()
+    await act(async () => streams[0].onDone("Complete"))
+  })
+
+  it("reset prevents a late selection claim from starting a request", async () => {
+    let resolve!: (value: any) => void
+    vi.mocked(window.electronAPI.claimTextAction).mockImplementationOnce(() => new Promise((r) => { resolve = r }))
+    render(<Queue setView={vi.fn()} />)
+    await act(async () => {})
+    await act(async () => {
+      state.listeners.onResetView()
+      resolve({ id: "late-id", kind: "selection", text: "Late selection" })
+    })
+    expect(window.electronAPI.chatStream).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Late selection/)).not.toBeInTheDocument()
+  })
+
+  it("unmount drops a delayed claim instead of starting AI in a closed view", async () => {
+    let resolve!: (value: any) => void
+    vi.mocked(window.electronAPI.claimTextAction).mockImplementationOnce(() => new Promise((r) => { resolve = r }))
+    const view = render(<Queue setView={vi.fn()} />)
+    await act(async () => {})
+    view.unmount()
+    await act(async () => resolve({ id: "closed-id", kind: "selection", text: "Closed selection" }))
+    expect(window.electronAPI.chatStream).not.toHaveBeenCalled()
+    expect(window.electronAPI.cancelTextAction).toHaveBeenCalled()
+  })
+
+  it("shows capture failures inline without sending them to AI", async () => {
+    vi.mocked(window.electronAPI.claimTextAction).mockResolvedValueOnce({ id: "error-id", kind: "error", error: "Select some text first." })
+    await act(async () => { render(<Queue setView={vi.fn()} />) })
+    expect(screen.getByText("Select some text first.")).toBeInTheDocument()
+    expect(window.electronAPI.chatStream).not.toHaveBeenCalled()
+  })
+
   it("keeps partial text on Stop and ignores all late chat callbacks", async () => {
     const { user } = await startChat()
     act(() => streams[0].onToken("partial response"))

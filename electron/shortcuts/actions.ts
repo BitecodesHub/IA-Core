@@ -11,6 +11,7 @@ export interface ShortcutActionDef {
   category: "window" | "capture" | "processing" | "mode"
   /** Optional grouping key for the UI (e.g. the four move actions). */
   group?: string
+  macOnly?: boolean
 }
 
 export interface LocalShortcutActionDef {
@@ -46,6 +47,22 @@ export const SHORTCUT_ACTIONS: Record<ShortcutActionId, ShortcutActionDef> = {
     description: "Capture the screen and queue it for analysis.",
     defaultAccelerator: "CommandOrControl+Alt+Shift+H",
     category: "capture",
+  },
+  analyzeSelectedText: {
+    id: "analyzeSelectedText",
+    label: "Analyze Selected Text",
+    description: "Analyze the foreground app’s selection using your configured AI provider. Requires macOS Accessibility access.",
+    defaultAccelerator: "CommandOrControl+Alt+Shift+A",
+    category: "processing",
+    macOnly: true,
+  },
+  pasteCopiedAnswer: {
+    id: "pasteCopiedAnswer",
+    label: "Paste Copied Answer",
+    description: "Paste the current clipboard into the focused app without pressing Enter. Requires macOS Accessibility access.",
+    defaultAccelerator: "CommandOrControl+Alt+Shift+X",
+    category: "processing",
+    macOnly: true,
   },
   process: {
     id: "process",
@@ -113,11 +130,14 @@ export const DEFAULT_BINDINGS: Record<ShortcutActionId, Binding> = Object.fromEn
  * `undefined` (absent) -> default; `null` -> explicitly disabled.
  */
 export function resolveEffectiveBindings(
-  overrides: Partial<Record<ShortcutActionId, Binding>>
+  overrides: Partial<Record<ShortcutActionId, Binding>>,
+  platform?: string
 ): Record<ShortcutActionId, Binding> {
   const result = {} as Record<ShortcutActionId, Binding>
   for (const id of Object.keys(SHORTCUT_ACTIONS) as ShortcutActionId[]) {
-    result[id] = id in overrides ? (overrides[id] as Binding) : DEFAULT_BINDINGS[id]
+    result[id] = platform && platform !== "darwin" && SHORTCUT_ACTIONS[id].macOnly
+      ? null
+      : id in overrides ? (overrides[id] as Binding) : DEFAULT_BINDINGS[id]
   }
   return result
 }

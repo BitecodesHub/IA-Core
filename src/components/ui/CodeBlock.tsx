@@ -21,7 +21,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ code, language }) => {
   }
 
   return (
-    <div className="relative group my-2">
+    <div className="code-block relative group my-2">
       <div className="flex items-center justify-between bg-[#1e1e1e] border border-white/20 rounded-t-lg px-3 py-2">
         <span className="text-xs text-white/60 font-mono">{language}</span>
         <button

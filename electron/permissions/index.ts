@@ -160,11 +160,12 @@ export async function requestStartupPermissions(
 }
 
 /** Open the OS privacy pane for a given capability, where one exists. */
-export async function openPrivacySettings(kind: "screen" | "microphone"): Promise<{ ok: boolean }> {
+export async function openPrivacySettings(kind: "screen" | "microphone" | "accessibility"): Promise<{ ok: boolean }> {
   try {
     if (process.platform === "darwin") {
-      const pane =
-        kind === "screen"
+      const pane = kind === "accessibility"
+        ? "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        : kind === "screen"
           ? "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
           : "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
       await shell.openExternal(pane)

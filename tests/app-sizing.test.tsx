@@ -26,6 +26,7 @@ beforeEach(() => {
   window.electronAPI = {
     getSettings: vi.fn().mockResolvedValue({ general: { theme: "dark" } }),
     onSettingsChanged: vi.fn(() => vi.fn()),
+    onTextActionAvailable: vi.fn(() => vi.fn()),
     onSolutionStart: vi.fn(() => vi.fn()), onUnauthorized: vi.fn(() => vi.fn()),
     onResetView: vi.fn(() => vi.fn()), onProblemExtracted: vi.fn(() => vi.fn()),
     updateContentDimensions: dimensions,

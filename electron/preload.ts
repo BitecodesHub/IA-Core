@@ -14,6 +14,7 @@ import type {
 import type { AcceleratorValidation } from "./shortcuts/validation"
 import type { PermissionReport } from "./permissions"
 import type { SettingsPersistenceStatus } from "./config/SettingsService"
+import type { PendingTextAction } from "./TextActionCoordinator"
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
 
@@ -29,6 +30,11 @@ interface ElectronAPI {
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>
   copyToClipboard: (text: string) => Promise<{ ok: boolean; error?: string }>
+  onTextActionAvailable: (callback: (data: { openChat: boolean }) => void) => () => void
+  claimTextAction: () => Promise<PendingTextAction | null>
+  cancelTextAction: () => void
+  getTextAccessibility: () => Promise<{ supported: boolean; trusted: boolean; error?: string }>
+  requestTextAccessibility: () => Promise<{ supported: boolean; trusted: boolean; error?: string }>
   /** Blink positional dots for a detected MCQ answer (letters A–E). Fire-and-forget. */
   showMcqHint: (letters: string[]) => void
   onScreenshotTaken: (callback: (data: { path: string; preview: string }) => void) => () => void
@@ -108,7 +114,7 @@ interface ElectronAPI {
   getPermissions: () => Promise<PermissionReport>
   refreshPermissions: () => Promise<PermissionReport>
   onPermissionsChanged: (callback: (report: PermissionReport) => void) => () => void
-  openPrivacySettings: (kind: "screen" | "microphone") => Promise<{ ok: boolean }>
+  openPrivacySettings: (kind: "screen" | "microphone" | "accessibility") => Promise<{ ok: boolean }>
   openScreenRecordingSettings: () => Promise<{ ok: boolean }>
 
   // Settings
@@ -167,6 +173,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getScreenshots: () => ipcRenderer.invoke("get-screenshots"),
   deleteScreenshot: (path: string) => ipcRenderer.invoke("delete-screenshot", path),
   copyToClipboard: (text: string) => ipcRenderer.invoke("clipboard:write", text),
+  onTextActionAvailable: (callback: (data: { openChat: boolean }) => void) => {
+    const subscription = (_: unknown, data: { openChat: boolean }) => callback(data)
+    ipcRenderer.on("text-action:available", subscription)
+    return () => ipcRenderer.removeListener("text-action:available", subscription)
+  },
+  claimTextAction: () => ipcRenderer.invoke("text-action:claim"),
+  cancelTextAction: () => ipcRenderer.send("text-action:cancel"),
+  getTextAccessibility: () => ipcRenderer.invoke("text-action:accessibility"),
+  requestTextAccessibility: () => ipcRenderer.invoke("text-action:request-accessibility"),
   showMcqHint: (letters: string[]) => ipcRenderer.send("mcq:hint", letters),
 
   // Event listeners
@@ -348,7 +363,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("permissions:changed", subscription)
     return () => ipcRenderer.removeListener("permissions:changed", subscription)
   },
-  openPrivacySettings: (kind: "screen" | "microphone") =>
+  openPrivacySettings: (kind: "screen" | "microphone" | "accessibility") =>
     ipcRenderer.invoke("open-privacy-settings", kind),
   openScreenRecordingSettings: () => ipcRenderer.invoke("open-screen-recording-settings"),
 

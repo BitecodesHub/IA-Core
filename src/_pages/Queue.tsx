@@ -36,6 +36,8 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   const [isChatOpen, setIsChatOpen] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
+  const textClaimRef = useRef(0)
+  const textMountedRef = useRef(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const screenshotRequestRef = useRef<{ id: string; messageId: number; controller: AbortController } | null>(null)
   // Ids of assistant messages already scanned for code (copied once, silently).
@@ -43,18 +45,20 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   // Ids of assistant messages already scanned for an MCQ answer (hinted once).
   const hintedMcqRef = useRef<Set<number>>(new Set())
 
-  const handleChatSend = async () => {
-    if (!chatInput.trim() || screenshotRequestRef.current) return
+  const handleChatSend = async (message = chatInput, preserveDraft = false) => {
+    if (!message.trim() || screenshotRequestRef.current) return
+    textClaimRef.current++
+    if (!preserveDraft) window.electronAPI.cancelTextAction()
     abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
-    const userMsg: ChatMessage = { role: "user", text: chatInput, id: ++messageSequence }
+    const userMsg: ChatMessage = { role: "user", text: message, id: ++messageSequence }
     const aiId = ++messageSequence
     setChatMessages((prev) => [...prev, userMsg, { role: "assistant", text: "", id: aiId, isStreaming: true }])
     setChatLoading(true)
-    setChatInput("")
+    if (!preserveDraft) setChatInput("")
     try {
-      await streamChatResponse(chatInput, aiId, controller.signal)
+      await streamChatResponse(message, aiId, controller.signal)
     } catch (err: any) {
       if (!controller.signal.aborted) {
         setChatMessages((prev) => prev.map((m) => m.id === aiId
@@ -69,7 +73,9 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     }
   }
 
-  const stopRequests = () => {
+  const stopRequests = (cancelText = true) => {
+    textClaimRef.current++
+    if (cancelText) window.electronAPI.cancelTextAction()
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
     const request = screenshotRequestRef.current
@@ -151,6 +157,44 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       if (!settled) signal?.addEventListener("abort", abort, { once: true })
     })
   }
+
+  const sendChatRef = useRef(handleChatSend)
+  sendChatRef.current = handleChatSend
+
+  useEffect(() => {
+    let mounted = true
+    textMountedRef.current = true
+    const consume = async () => {
+      const version = ++textClaimRef.current
+      try {
+        const action = await window.electronAPI.claimTextAction()
+        if (!mounted || version !== textClaimRef.current || !action) return
+        setIsChatOpen(true)
+        if (action.kind === "error") {
+          setChatMessages((prev) => [...prev, { role: "assistant", text: action.error, id: ++messageSequence }])
+          return
+        }
+        stopRequests()
+        await sendChatRef.current(`Analyze this selected text:\n\n${action.text}`, true)
+      } catch {
+        if (mounted && version === textClaimRef.current) {
+          setIsChatOpen(true)
+          setChatMessages((prev) => [...prev, { role: "assistant", text: "Could not load the selected text. Try the shortcut again.", id: ++messageSequence }])
+        }
+      }
+    }
+    const off = window.electronAPI.onTextActionAvailable(() => { void consume() })
+    queueMicrotask(() => { if (mounted) void consume() })
+    return () => {
+      mounted = false
+      textMountedRef.current = false
+      textClaimRef.current++
+      off()
+      queueMicrotask(() => {
+        if (!textMountedRef.current) window.electronAPI.cancelTextAction()
+      })
+    }
+  }, [])
 
   // IPC listeners — registered ONCE (not coupled to tooltip state, which would
   // tear them down and re-subscribe on every tooltip toggle).
@@ -248,7 +292,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       unsub()
       unsubStream()
       unsubProblem()
-      stopRequests()
+      stopRequests(false)
     }
   }, [refetch])
 

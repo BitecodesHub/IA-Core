@@ -356,6 +356,31 @@ try {
   const bad = states.filter(([, s]) => s === "os-conflict" || s === "duplicate")
   check("global shortcuts registered", states.length > 0 && bad.length === 0, bad.length ? JSON.stringify(bad) : `${states.filter(([, s]) => s === "active").length} active`)
 
+  if (sourceRoot) {
+    check("selected text shortcut has requested default", sc.effective.analyzeSelectedText === "CommandOrControl+Alt+Shift+A")
+    check("paste copied answer shortcut has requested default", sc.effective.pasteCopiedAnswer === "CommandOrControl+Alt+Shift+X")
+    const access = await page("window.electronAPI.getTextAccessibility()")
+    check("Accessibility status is readable without a prompt", typeof access.supported === "boolean" && typeof access.trusted === "boolean", JSON.stringify(access))
+    await win(`w.webContents.send('reset-view')`)
+    await main(`(() => {
+      const r = process.mainModule.require;
+      const s = r(r('path').join(r('electron').app.getAppPath(), 'dist-electron', 'main.js')).AppState.getInstance();
+      globalThis.__selectionOriginal = s.macTextActions.selection;
+      s.macTextActions.selection = async () => ({ok:true,text:'Synthetic selected paragraph for shortcut analysis'});
+      return s.textActions.analyze();
+    })()`)
+    check("selected text appears in existing chat", !!await until(() => page("document.body.innerText.includes('Synthetic selected paragraph for shortcut analysis')"), 5000, 100))
+    check("selected text uses the existing streaming provider", !!await until(() => mock.log.some(r => r.path === '/api/v1/desktop/assistant' && r.prompt?.includes('Synthetic selected paragraph for shortcut analysis')), 5000, 100))
+    await until(() => page("!document.querySelector('button[aria-label=\"Stop\"]')"), 5000, 100)
+    await main(`(() => {
+      const r = process.mainModule.require;
+      const s = r(r('path').join(r('electron').app.getAppPath(), 'dist-electron', 'main.js')).AppState.getInstance();
+      s.macTextActions.selection = globalThis.__selectionOriginal;
+      delete globalThis.__selectionOriginal;
+      return true;
+    })()`)
+  }
+
   // --- Window controls ------------------------------------------------------------
   const x0 = await win("w.getBounds().x")
   await page("window.electronAPI.moveWindowRight()")

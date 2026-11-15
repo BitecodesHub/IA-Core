@@ -100,7 +100,7 @@ const CodeComparisonSection = ({
           </div>
         </div>
       ) : (
-        <div className="flex flex-row gap-0.5 bg-[#161b22] rounded-lg overflow-hidden">
+        <div className="code-block flex flex-row gap-0.5 bg-[#161b22] rounded-lg overflow-hidden">
           {/* Previous Code */}
           <div className="w-1/2 border-r border-gray-700">
             <div className="bg-[#2d333b] px-3 py-1.5">

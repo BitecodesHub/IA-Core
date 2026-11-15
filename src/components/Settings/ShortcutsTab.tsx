@@ -18,6 +18,7 @@ const statusStyles: Record<string, string> = {
   disabled: "text-white/40",
   "os-conflict": "text-amber-400",
   duplicate: "text-red-400",
+  unsupported: "text-white/40",
 }
 
 const statusLabel: Record<string, string> = {
@@ -25,6 +26,7 @@ const statusLabel: Record<string, string> = {
   disabled: "Disabled",
   "os-conflict": "Reserved by system / another app",
   duplicate: "Conflict",
+  unsupported: "macOS only",
 }
 
 const categoryLabels: Record<string, string> = {
@@ -44,10 +46,17 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
   const [notice, setNotice] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [category, setCategory] = useState("all")
+  const [accessibility, setAccessibility] = useState<Awaited<ReturnType<Window["electronAPI"]["getTextAccessibility"]>> | null>(null)
+  const [requestingAccess, setRequestingAccess] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      setSnapshot(await window.electronAPI.getShortcuts())
+      const [shortcuts, access] = await Promise.all([
+        window.electronAPI.getShortcuts(),
+        window.electronAPI.getTextAccessibility(),
+      ])
+      setSnapshot(shortcuts)
+      setAccessibility(access)
       setLoadError(null)
     } catch (error: any) {
       setLoadError(error?.message ?? "Could not load shortcuts.")
@@ -69,6 +78,17 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
     const off = window.electronAPI.onShortcutsStatusChanged(() => load())
     return off
   }, [load])
+
+  const requestAccessibility = async () => {
+    setRequestingAccess(true)
+    try {
+      setAccessibility(await window.electronAPI.requestTextAccessibility())
+    } catch {
+      setNotice("Could not request Accessibility access. Open Accessibility Settings and try again.")
+    } finally {
+      setRequestingAccess(false)
+    }
+  }
 
   const localEffective = useMemo(
     () => resolveEffectiveLocalBindings(settings?.localShortcuts.bindings ?? {}),
@@ -199,6 +219,23 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
         </button>
       </div>
 
+      {accessibility?.supported && (
+        <div className="rounded border border-white/20 p-2 space-y-2 text-xs">
+          <div className="font-medium">Selected Text & Paste</div>
+          <p className="text-white/70" role="status">
+            {accessibility.error ?? (accessibility.trusted
+              ? "Accessibility access is enabled. Select text in another app to analyze it, or paste your clipboard without pressing Enter."
+              : "Accessibility access is required. Enable the entry requested by Notes in macOS settings, then refresh. If macOS lists mac-text-actions, enable that helper.")}
+          </p>
+          <p className="text-white/70">Selected text is sent to your configured AI provider. Some apps do not expose readable selections.</p>
+          <div className="flex flex-wrap gap-2">
+            {!accessibility.trusted && <button type="button" disabled={requestingAccess} className="rounded border border-white/30 px-2 py-1 hover:bg-white/10" onClick={requestAccessibility}>{requestingAccess ? "Requesting…" : "Enable Accessibility"}</button>}
+            <button type="button" className="rounded border border-white/30 px-2 py-1 hover:bg-white/10" onClick={() => void window.electronAPI.openPrivacySettings("accessibility")}>Open Accessibility Settings</button>
+            <button type="button" className="rounded border border-white/30 px-2 py-1 hover:bg-white/10" onClick={load}>Refresh Access</button>
+          </div>
+        </div>
+      )}
+
       <ImportExportPanel io={io} entity="shortcuts" />
 
       {(notice || io.msg) && (
@@ -224,6 +261,7 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               <KeyCaptureInput
+                disabled={row.status === "unsupported"}
                 value={row.binding}
                 onCapture={(a) =>
                   row.scope === "global"
@@ -238,6 +276,7 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
                     ? window.electronAPI.setShortcut(row.id as ShortcutActionId, null).then(load)
                     : setLocalBinding(row.id as LocalShortcutActionId, null)
                 }
+                disabled={row.status === "unsupported"}
                 title="Disable this shortcut"
               >
                 Off
@@ -252,6 +291,7 @@ const ShortcutsTab: React.FC<{ search?: string }> = ({ search = "" }) => {
                         DEFAULT_LOCAL_BINDINGS[row.id as LocalShortcutActionId]
                       )
                 }
+                disabled={row.status === "unsupported"}
                 title="Reset to default"
               >
                 ↺

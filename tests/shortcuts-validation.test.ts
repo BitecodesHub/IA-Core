@@ -5,7 +5,7 @@ import {
   detectDuplicates,
   findConflict,
 } from "../electron/shortcuts/validation"
-import { DEFAULT_BINDINGS, DEFAULT_LOCAL_BINDINGS } from "../electron/shortcuts/actions"
+import { DEFAULT_BINDINGS, DEFAULT_LOCAL_BINDINGS, resolveEffectiveBindings } from "../electron/shortcuts/actions"
 import type { ShortcutActionId, Binding } from "../electron/config/schema"
 
 describe("validateAccelerator", () => {
@@ -109,6 +109,17 @@ describe("detectDuplicates / findConflict", () => {
 })
 
 describe("default shortcuts are conflict-resistant", () => {
+  it("enables selected text and clipboard paste only on macOS", () => {
+    const mac = resolveEffectiveBindings({}, "darwin")
+    expect(mac.analyzeSelectedText).toBe("CommandOrControl+Alt+Shift+A")
+    expect(mac.pasteCopiedAnswer).toBe("CommandOrControl+Alt+Shift+X")
+    for (const platform of ["win32", "linux"]) {
+      const unsupported = resolveEffectiveBindings({ analyzeSelectedText: "Control+A", pasteCopiedAnswer: "Control+X" }, platform)
+      expect(unsupported.analyzeSelectedText).toBeNull()
+      expect(unsupported.pasteCopiedAnswer).toBeNull()
+    }
+  })
+
   it("every default is a valid accelerator", () => {
     for (const accel of Object.values(DEFAULT_BINDINGS)) {
       if (accel === null) continue

@@ -5,7 +5,7 @@
   "scripts": {
     "clean": "rimraf dist dist-electron",
     "dev": "vite",
-    "build": "npm run clean && npm run typecheck && vite build && tsc -p electron/tsconfig.json",
+    "build": "npm run clean && npm run typecheck && vite build && tsc -p electron/tsconfig.json && node scripts/build-mac-text-actions.cjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
     "lint": "eslint .",
@@ -13,10 +13,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "cross-env SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm rebuild sharp",
-    "electron:compile": "tsc -p electron/tsconfig.json",
+    "electron:compile": "tsc -p electron/tsconfig.json && node scripts/build-mac-text-actions.cjs",
     "electron:run": "cross-env NODE_ENV=development electron .",
     "electron:dev": "npm run electron:compile && concurrently -k -s first -n vite,electron \"vite\" \"wait-on tcp:127.0.0.1:5180 && npm run electron:run\"",
-    "electron:build": "tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
+    "electron:build": "tsc -p electron/tsconfig.json && node scripts/build-mac-text-actions.cjs && cross-env NODE_ENV=production electron .",
     "app:dev": "npm run electron:dev",
     "app:build": "npm run build && electron-builder --config electron-builder.config.cjs",
     "watch": "tsc -p electron/tsconfig.json --watch",
@@ -32,6 +32,7 @@
       "dist/**/*",
       "dist-electron/**/*",
       "package.json",
+      "!dist-electron/mac-text-actions",
       "!dist-electron/**/*.map",
       "!dist/**/*.map",
       "!release/**",
@@ -71,6 +72,12 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
+      "extraResources": [
+        {
+          "from": "dist-electron/mac-text-actions",
+          "to": "native/mac-text-actions"
+        }
+      ],
       "target": [
         {
           "target": "dmg",
@@ -89,6 +96,7 @@
         "dist/**/*",
         "dist-electron/**/*",
         "package.json",
+        "!dist-electron/mac-text-actions",
         "!dist-electron/**/*.map",
         "!dist/**/*.map",
         "!release/**",

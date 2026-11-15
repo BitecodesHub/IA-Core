@@ -36,10 +36,11 @@ function stableIdentity() {
 }
 
 let IDENTITY = null
-function sign(target, entitlements) {
+function sign(target, entitlements, identifier) {
   const args = ["--force", "--sign", IDENTITY ?? "-", "--timestamp=none"]
   if (IDENTITY) args.push("--keychain", KEYCHAIN)
   if (entitlements) args.push("--entitlements", entitlements)
+  if (identifier) args.push("--identifier", identifier)
   execFileSync("codesign", [...args, target], { stdio: "inherit" })
 }
 
@@ -89,6 +90,13 @@ exports.default = async function adhocSign(context) {
   }
   const frameworks = path.join(app, "Contents", "Frameworks")
   for (const item of nestedCode(frameworks)) sign(item)
+  const textActions = path.join(app, "Contents", "Resources", "native", "mac-text-actions")
+  if (!fs.existsSync(textActions) || !isMachO(textActions)) {
+    throw new Error("The packaged macOS text-actions helper is missing or not a Mach-O executable")
+  }
+  // Keep the helper's fixed identifier (not the filename) so its signature —
+  // and any Accessibility grant keyed to it — stays stable across builds.
+  sign(textActions, undefined, "com.notes.desktop.mac-text-actions")
   sign(app, fs.existsSync(entitlements) ? entitlements : undefined)
   execFileSync("codesign", ["--verify", "--deep", "--strict", app], { stdio: "inherit" })
   console.log(`  • signed (${IDENTITY ? "stable self-signed identity" : "ad-hoc"}) and verified ${path.basename(app)}`)

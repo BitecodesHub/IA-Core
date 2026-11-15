@@ -18,6 +18,8 @@ export type ShortcutActionId =
   | "toggleWindow"
   | "showWindow"
   | "takeScreenshot"
+  | "analyzeSelectedText"
+  | "pasteCopiedAnswer"
   | "process"
   | "reset"
   | "toggleMode"
@@ -832,6 +834,8 @@ const KNOWN_ACTIONS: readonly ShortcutActionId[] = [
   "toggleWindow",
   "showWindow",
   "takeScreenshot",
+  "analyzeSelectedText",
+  "pasteCopiedAnswer",
   "process",
   "reset",
   "toggleMode",

@@ -15,6 +15,7 @@ import type { AcceleratorValidation } from "../../electron/shortcuts/validation"
 import type { ModelDiscoveryResult, ProviderHealth } from "../../electron/llm/providers"
 import type { PermissionReport } from "../../electron/permissions"
 import type { SettingsPersistenceStatus } from "../../electron/config/SettingsService"
+import type { PendingTextAction } from "../../electron/TextActionCoordinator"
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }
 
@@ -24,6 +25,11 @@ export interface ElectronAPI {
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>
   copyToClipboard: (text: string) => Promise<{ ok: boolean; error?: string }>
+  onTextActionAvailable: (callback: (data: { openChat: boolean }) => void) => () => void
+  claimTextAction: () => Promise<PendingTextAction | null>
+  cancelTextAction: () => void
+  getTextAccessibility: () => Promise<{ supported: boolean; trusted: boolean; error?: string }>
+  requestTextAccessibility: () => Promise<{ supported: boolean; trusted: boolean; error?: string }>
   /** Blink positional dots for a detected MCQ answer (letters A–E). Fire-and-forget. */
   showMcqHint: (letters: string[]) => void
   takeScreenshot: () => Promise<void>
@@ -70,7 +76,7 @@ export interface ElectronAPI {
   getPermissions: () => Promise<PermissionReport>
   refreshPermissions: () => Promise<PermissionReport>
   onPermissionsChanged: (callback: (report: PermissionReport) => void) => () => void
-  openPrivacySettings: (kind: "screen" | "microphone") => Promise<{ ok: boolean }>
+  openPrivacySettings: (kind: "screen" | "microphone" | "accessibility") => Promise<{ ok: boolean }>
   openScreenRecordingSettings: () => Promise<{ ok: boolean }>
 
   // LLM model management

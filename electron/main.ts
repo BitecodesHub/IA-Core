@@ -5,6 +5,10 @@ import { initializeIpcHandlers } from "./ipcHandlers"
 import { WindowHelper } from "./WindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
 import { ShortcutsHelper } from "./shortcuts/ShortcutsHelper"
+import { MacTextActions } from "./MacTextActions"
+import { TextActionCoordinator } from "./TextActionCoordinator"
+import { BitecodesAuth } from "./bitecodesAuth"
+import { UpdateChecker } from "./updateCheck"
 import { ProcessingHelper } from "./ProcessingHelper"
 import { HintOverlayHelper, type HintLetter } from "./HintOverlayHelper"
 import { SettingsService } from "./config/SettingsService"
@@ -79,6 +83,8 @@ export class AppState {
   private screenshotHelper: ScreenshotHelper
   public shortcutsHelper: ShortcutsHelper
   public processingHelper: ProcessingHelper
+  public readonly macTextActions = new MacTextActions()
+  public readonly textActions: TextActionCoordinator
   private hintOverlay: HintOverlayHelper
   private tray: Tray | null = null
 
@@ -110,6 +116,23 @@ export class AppState {
 
     // Initialize ProcessingHelper
     this.processingHelper = new ProcessingHelper(this)
+
+    this.textActions = new TextActionCoordinator({
+      selection: (signal) => this.macTextActions.selection(signal),
+      paste: (signal) => this.macTextActions.paste(signal),
+      session: () => BitecodesAuth.getInstance().getToken(),
+      blocked: () => UpdateChecker.getInstance().isUpdateRequired(),
+      notify: (openChat) => {
+        const win = this.getMainWindow()
+        if (!win || win.isDestroyed()) return
+        if (openChat) {
+          this.setView("queue")
+          this.showMainWindow()
+        }
+        win.webContents.send("text-action:available", { openChat })
+      },
+    })
+    this.processingHelper.onCancel(() => this.textActions.cancel())
 
     // Initialize ShortcutsHelper
     this.shortcutsHelper = new ShortcutsHelper(this)
@@ -167,6 +190,12 @@ export class AppState {
   // Window management methods
   public createWindow(): void {
     this.windowHelper.createWindow()
+    const win = this.getMainWindow()
+    win?.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame && !inPlace) this.textActions.cancel()
+    })
+    win?.webContents.on("destroyed", () => this.textActions.cancel())
+    win?.webContents.on("render-process-gone", () => this.textActions.cancel())
   }
 
   public hideMainWindow(): void {

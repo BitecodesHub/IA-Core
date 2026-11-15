@@ -89,6 +89,8 @@ describe("coerceSettings", () => {
       shortcuts: {
         bindings: {
           toggleWindow: "CommandOrControl+B",
+          analyzeSelectedText: "CommandOrControl+Alt+Shift+A",
+          pasteCopiedAnswer: null,
           bogusAction: "Control+Z",
           takeScreenshot: null,
           process: 42,
@@ -97,6 +99,8 @@ describe("coerceSettings", () => {
     })
     expect(s.shortcuts.bindings.toggleWindow).toBe("CommandOrControl+B")
     expect(s.shortcuts.bindings.takeScreenshot).toBeNull()
+    expect(s.shortcuts.bindings.analyzeSelectedText).toBe("CommandOrControl+Alt+Shift+A")
+    expect(s.shortcuts.bindings.pasteCopiedAnswer).toBeNull()
     expect("bogusAction" in s.shortcuts.bindings).toBe(false)
     expect("process" in s.shortcuts.bindings).toBe(false) // 42 is not string|null
   })

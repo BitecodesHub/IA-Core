@@ -14,6 +14,21 @@
   --border-secondary: rgba(255, 255, 255, 0.05);
   --glass-bg: rgba(255, 255, 255, 0.05); 
   --glass-border: rgba(255, 255, 255, 0.1);
+
+  /* Theme-routing channels. In the dark theme these resolve to white so the
+     global utility overrides below reproduce the original dark appearance
+     exactly. The light theme flips them to blue; the always-dark islands reset
+     them to white again (see the island rule near the bottom). */
+  --accent: #ffffff;
+  --accent-hover: #e5e5e5;
+  --accent-fg: #000000;
+  --border-rgb: 255, 255, 255;
+  --surface-rgb: 255, 255, 255;
+  --focus-ring: #ffffff;
+  --scroll-track: rgba(255, 255, 255, 0.05);
+  --scroll-thumb: rgba(255, 255, 255, 0.2);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.3);
+  --select-bg: rgba(255, 255, 255, 0.2);
 }
 
 :root[data-theme="light"] {
@@ -27,6 +42,40 @@
   --border-secondary: rgba(16, 20, 24, 0.08);
   --glass-bg: rgba(255, 255, 255, 0.78);
   --glass-border: rgba(16, 20, 24, 0.14);
+
+  /* Blue brand family for the white theme. */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-active: #1e40af;
+  --accent-fg: #ffffff;
+  --accent-soft: #dbeafe;
+  --accent-soft-2: #eff6ff;
+  --accent-border: #93c5fd;
+  --accent-rgb: 37, 99, 235;
+  --border-rgb: 37, 99, 235;
+  --surface-rgb: 37, 99, 235;
+  --focus-ring: #2563eb;
+  --scroll-track: rgba(37, 99, 235, 0.06);
+  --scroll-thumb: rgba(37, 99, 235, 0.32);
+  --scroll-thumb-hover: rgba(37, 99, 235, 0.5);
+  --select-bg: rgba(37, 99, 235, 0.22);
+
+  /* Readable-on-white semantic tones. The dark islands reset these to the
+     original Tailwind values so their colored badges stay legible on black. */
+  --sem-green-300: #15803d;
+  --sem-green-400: #15803d;
+  --sem-emerald-300: #047857;
+  --sem-emerald-400: #059669;
+  --sem-amber-200: #b45309;
+  --sem-amber-300: #b45309;
+  --sem-amber-400: #d97706;
+  --sem-red-300: #b91c1c;
+  --sem-red-400: #dc2626;
+  --sem-indigo-200: #4338ca;
+  --sem-indigo-400: #4f46e5;
+  --sem-sky-400: #0284c7;
+  --sem-yellow-300: #a16207;
+  --sem-yellow-400: #ca8a04;
 }
 
 /* Global Dark Theme */
@@ -217,7 +266,7 @@ input::placeholder, textarea::placeholder {
 }
 
 :where(button, input, textarea, select, a, [tabindex]):focus-visible {
-  outline: 2px solid var(--text-primary) !important;
+  outline: 2px solid var(--focus-ring) !important;
   outline-offset: 2px;
 }
 
@@ -265,6 +314,10 @@ button:disabled {
   color: var(--text-primary) !important;
 }
 
+.text-gray-200 {
+  color: var(--text-secondary) !important;
+}
+
 .text-white {
   color: var(--text-primary) !important;
 }
@@ -308,8 +361,38 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.2) !important;
 }
 
+/* White-alpha borders route through --border-rgb: white in the dark theme and
+   inside islands, blue in the light theme. Alphas match the Tailwind defaults so
+   the dark theme is unchanged. */
 .border-white {
-  border-color: rgba(255, 255, 255, 0.2) !important;
+  border-color: rgba(var(--border-rgb), 0.2) !important;
+}
+.border-white\/10 {
+  border-color: rgba(var(--border-rgb), 0.1) !important;
+}
+.border-white\/15 {
+  border-color: rgba(var(--border-rgb), 0.15) !important;
+}
+.border-white\/20 {
+  border-color: rgba(var(--border-rgb), 0.2) !important;
+}
+.border-white\/25 {
+  border-color: rgba(var(--border-rgb), 0.25) !important;
+}
+.border-white\/30 {
+  border-color: rgba(var(--border-rgb), 0.3) !important;
+}
+.border-white\/40 {
+  border-color: rgba(var(--border-rgb), 0.4) !important;
+}
+.border-white\/50 {
+  border-color: rgba(var(--border-rgb), 0.5) !important;
+}
+.hover\:border-white:hover {
+  border-color: rgba(var(--border-rgb), 1) !important;
+}
+.hover\:border-white\/40:hover {
+  border-color: rgba(var(--border-rgb), 0.4) !important;
 }
 
 /* Dark Theme Specific Overrides */
@@ -317,36 +400,45 @@ button:disabled {
   background-color: rgba(0, 0, 0, 0.8) !important;
 }
 
+/* White-alpha surfaces route through --surface-rgb (white in dark/islands, blue
+   in light). Alphas reproduce the original dark values. */
+.bg-white\/5 {
+  background-color: rgba(var(--surface-rgb), 0.05) !important;
+}
 .bg-white\/10 {
-  background-color: rgba(255, 255, 255, 0.05) !important;
+  background-color: rgba(var(--surface-rgb), 0.05) !important;
 }
-
+.bg-white\/20 {
+  background-color: rgba(var(--surface-rgb), 0.2) !important;
+}
 .bg-white\/25 {
-  background-color: rgba(255, 255, 255, 0.08) !important;
+  background-color: rgba(var(--surface-rgb), 0.08) !important;
 }
-
 .bg-white\/85 {
-  background-color: rgba(255, 255, 255, 0.1) !important;
+  background-color: rgba(var(--surface-rgb), 0.1) !important;
+}
+.hover\:bg-white\/10:hover {
+  background-color: rgba(var(--surface-rgb), 0.1) !important;
 }
 
-/* Scrollbar Dark Theme */
+/* Scrollbar Theme */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--scroll-track);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--scroll-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--scroll-thumb-hover);
 }
 
 /* Toast Dark Theme */
@@ -361,20 +453,27 @@ button:disabled {
   border-radius: 0.5rem !important;
 }
 
+/* Dracula's default line-number gutter (#6272a4) is only ~3.7:1 on the code
+   island's near-black fill. Lift it to clear 4.5:1. Code stays dark in both
+   themes, so this readability fix applies to both. */
+.react-syntax-highlighter-line-number {
+  color: #7e88bb !important;
+}
+
 /* Loading Animation Dark Theme - DISABLED */
 .animate-pulse {
   /* Removed pulsing animation */
   opacity: 1;
 }
 
-/* Selection Dark Theme */
+/* Selection Theme */
 ::selection {
-  background-color: rgba(255, 255, 255, 0.2);
+  background-color: var(--select-bg);
   color: var(--text-primary);
 }
 
 ::-moz-selection {
-  background-color: rgba(255, 255, 255, 0.2);
+  background-color: var(--select-bg);
   color: var(--text-primary);
 }
 
@@ -426,4 +525,178 @@ textarea:-webkit-autofill {
 .gate-drag button,
 .gate-drag [aria-label="Confirmation code"] {
   cursor: pointer;
+}
+
+/* Checkbox / radio accent follows the brand: white in dark, blue in light. */
+.accent-white {
+  accent-color: var(--accent) !important;
+}
+
+/* ============================================================================
+   Always-dark islands. The capsule, voice panel, sign-in/update gates and code
+   blocks must stay dark and legible over arbitrary content in BOTH themes. They
+   reset every theme-routing channel to its dark value so the global overrides
+   above resolve to white (not blue/dark) inside them. */
+.glass-capsule,
+.voice-panel,
+.signin-gate,
+.code-block {
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.8);
+  --text-muted: rgba(255, 255, 255, 0.6);
+  --border-rgb: 255, 255, 255;
+  --surface-rgb: 255, 255, 255;
+  --focus-ring: #ffffff;
+  --sem-green-300: #86efac;
+  --sem-green-400: #4ade80;
+  --sem-emerald-300: #6ee7b7;
+  --sem-emerald-400: #34d399;
+  --sem-amber-200: #fde68a;
+  --sem-amber-300: #fcd34d;
+  --sem-amber-400: #fbbf24;
+  --sem-red-300: #fca5a5;
+  --sem-red-400: #f87171;
+  --sem-indigo-200: #c7d2fe;
+  --sem-indigo-400: #818cf8;
+  --sem-sky-400: #38bdf8;
+  --sem-yellow-300: #fde047;
+  --sem-yellow-400: #facc15;
+}
+
+/* ============================================================================
+   Light ("white") theme. Blue brand accent on white surfaces, dark readable
+   text, visible blue borders, perceptible blue hover/focus/selection. The dark
+   theme above is untouched; everything here is scoped to data-theme="light". */
+
+/* Readable text scale. Maps the white-alpha utilities onto the solid light text
+   tones; inside islands the --text-* vars are white so these stay white. */
+:root[data-theme="light"] .text-white\/90,
+:root[data-theme="light"] .text-white\/85 {
+  color: var(--text-primary) !important;
+}
+:root[data-theme="light"] .text-white\/80,
+:root[data-theme="light"] .text-white\/75,
+:root[data-theme="light"] .text-white\/70 {
+  color: var(--text-secondary) !important;
+}
+:root[data-theme="light"] .text-white\/65,
+:root[data-theme="light"] .text-white\/60,
+:root[data-theme="light"] .text-white\/50,
+:root[data-theme="light"] .text-white\/45,
+:root[data-theme="light"] .text-white\/40,
+:root[data-theme="light"] .text-white\/35 {
+  color: var(--text-muted) !important;
+}
+:root[data-theme="light"] .hover\:text-white\/85:hover {
+  color: var(--text-secondary) !important;
+}
+
+/* Prominent blue panel borders and active-tab indicator. */
+:root[data-theme="light"] .border-white {
+  border-color: rgba(var(--border-rgb), 0.45) !important;
+}
+
+/* Perceptible blue hover wash on icon buttons, options and rows. */
+:root[data-theme="light"] .hover\:bg-white\/10:hover {
+  background-color: rgba(var(--surface-rgb), 0.12) !important;
+}
+:root[data-theme="light"] .hover\:text-white:hover {
+  color: var(--text-primary) !important;
+}
+
+/* Inverted highlights become solid blue with white text: user chat bubble, send
+   button, selected mode chip, active combobox option, account sign-in button.
+   The gate-primary button is excluded so the gate keeps its white CTA. */
+:root[data-theme="light"] .bg-white.text-black:not(.gate-primary) {
+  background-color: var(--accent) !important;
+  color: var(--accent-fg) !important;
+}
+:root[data-theme="light"] .bg-white.text-black:not(.gate-primary):hover {
+  background-color: var(--accent-hover) !important;
+}
+:root[data-theme="light"] .hover\:bg-white\/90:hover {
+  background-color: var(--accent-hover) !important;
+}
+/* Detail text and badges sitting on the blue active combobox option. The detail
+   stays near-white (not 0.78) so 10px host/region lines clear 4.5:1 on the blue. */
+:root[data-theme="light"] .bg-white.text-black .text-black\/60 {
+  color: rgba(255, 255, 255, 0.95) !important;
+}
+:root[data-theme="light"] .bg-white.text-black .border-black\/40 {
+  border-color: rgba(255, 255, 255, 0.55) !important;
+}
+
+/* The dark content panels (Solutions/Debug body, command bar, dialog) become
+   light blue-tinted surfaces; their embedded syntax-highlighted code stays dark
+   via its own background. */
+:root[data-theme="light"] .bg-black\/60 {
+  background-color: rgba(239, 246, 255, 0.92) !important;
+}
+:root[data-theme="light"] .bg-black\/10 {
+  background-color: rgba(37, 99, 235, 0.1) !important;
+}
+:root[data-theme="light"] .bg-black\/30 {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+}
+
+/* Semantic colors readable on white. Islands reset the vars to Tailwind values. */
+:root[data-theme="light"] .text-green-300 { color: var(--sem-green-300) !important; }
+:root[data-theme="light"] .text-green-400 { color: var(--sem-green-400) !important; }
+:root[data-theme="light"] .text-emerald-300 { color: var(--sem-emerald-300) !important; }
+:root[data-theme="light"] .text-emerald-400 { color: var(--sem-emerald-400) !important; }
+:root[data-theme="light"] .text-amber-200 { color: var(--sem-amber-200) !important; }
+:root[data-theme="light"] .text-amber-300 { color: var(--sem-amber-300) !important; }
+:root[data-theme="light"] .text-amber-400 { color: var(--sem-amber-400) !important; }
+:root[data-theme="light"] .text-red-300 { color: var(--sem-red-300) !important; }
+:root[data-theme="light"] .text-red-400 { color: var(--sem-red-400) !important; }
+:root[data-theme="light"] .text-indigo-200 { color: var(--sem-indigo-200) !important; }
+:root[data-theme="light"] .text-indigo-400 { color: var(--sem-indigo-400) !important; }
+:root[data-theme="light"] .text-sky-400 { color: var(--sem-sky-400) !important; }
+:root[data-theme="light"] .text-yellow-300 { color: var(--sem-yellow-300) !important; }
+:root[data-theme="light"] .text-yellow-400 { color: var(--sem-yellow-400) !important; }
+:root[data-theme="light"] .border-green-400 { border-color: var(--sem-green-400) !important; }
+:root[data-theme="light"] .border-emerald-400 { border-color: var(--sem-emerald-400) !important; }
+:root[data-theme="light"] .border-emerald-400\/50 { border-color: rgba(5, 150, 105, 0.5) !important; }
+:root[data-theme="light"] .border-green-400\/50 { border-color: rgba(22, 163, 74, 0.5) !important; }
+:root[data-theme="light"] .border-amber-400 { border-color: var(--sem-amber-400) !important; }
+:root[data-theme="light"] .border-amber-400\/50 { border-color: rgba(217, 119, 6, 0.5) !important; }
+:root[data-theme="light"] .border-amber-400\/30 { border-color: rgba(217, 119, 6, 0.3) !important; }
+:root[data-theme="light"] .border-indigo-400 { border-color: var(--sem-indigo-400) !important; }
+:root[data-theme="light"] .border-indigo-400\/30 { border-color: rgba(79, 70, 229, 0.3) !important; }
+:root[data-theme="light"] .border-yellow-400 { border-color: var(--sem-yellow-400) !important; }
+:root[data-theme="light"] .border-red-600 { border-color: var(--sem-red-400) !important; }
+
+/* The chat Stop button sits on a solid red danger fill outside the dark islands;
+   keep its glyph white (the global .text-white would otherwise turn it dark). */
+:root[data-theme="light"] .bg-red-600.text-white { color: #ffffff !important; }
+
+/* Decorative analysis bullets pick up the brand blue. */
+:root[data-theme="light"] .bg-blue-400\/80 {
+  background-color: rgba(37, 99, 235, 0.85) !important;
+}
+
+/* Soft semantic tint boxes that live on light surfaces (shortcut recorder). */
+:root[data-theme="light"] .bg-yellow-400\/10 {
+  background-color: rgba(202, 138, 4, 0.12) !important;
+}
+
+/* Blue focus ring for the Tailwind ring utility used by the mode selector. */
+:root[data-theme="light"] .focus-visible\:ring-white\/50:focus-visible {
+  --tw-ring-color: rgba(37, 99, 235, 0.5) !important;
+}
+
+/* Loading shimmer text (gradient-clipped) becomes a blue sweep on white. Both
+   ends stay dark enough (blue-800 ~8:1, blue-600 highlight ~4.7:1) that the text
+   is readable through the whole sweep, not just at its darkest band. */
+:root[data-theme="light"] .from-gray-300 {
+  --tw-gradient-from: #1e40af var(--tw-gradient-from-position);
+  --tw-gradient-to: rgb(30 64 175 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+:root[data-theme="light"] .via-gray-100 {
+  --tw-gradient-to: rgb(37 99 235 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), #2563eb var(--tw-gradient-via-position), var(--tw-gradient-to);
+}
+:root[data-theme="light"] .to-gray-300 {
+  --tw-gradient-to: #1e40af var(--tw-gradient-to-position);
 }
