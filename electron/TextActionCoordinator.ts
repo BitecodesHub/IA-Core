@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto"
 
 export type PendingTextAction =
   | { id: string; kind: "selection"; text: string }
+  | { id: string; kind: "screenshot"; path: string }
   | { id: string; kind: "error"; error: string }
 
 type NativeFailure = { ok: false; error: string; code: string }
 
 interface Dependencies {
   selection: (signal: AbortSignal) => Promise<{ ok: true; text: string } | NativeFailure>
+  captureRegion?: (signal: AbortSignal) => Promise<{ path: string }>
   paste: (signal: AbortSignal) => Promise<{ ok: true } | NativeFailure>
   session: () => string | null
   blocked: () => boolean
@@ -57,6 +59,22 @@ export class TextActionCoordinator {
     try {
       const result = await this.dependencies.selection(controller.signal)
       if (controller.signal.aborted || session !== this.dependencies.session() || this.dependencies.blocked()) return
+      if ("code" in result && result.code === "NO_SELECTION" && this.dependencies.captureRegion) {
+        try {
+          const capture = await this.dependencies.captureRegion(controller.signal)
+          if (controller.signal.aborted || session !== this.dependencies.session() || this.dependencies.blocked()) return
+          this.publish({ id: randomUUID(), kind: "screenshot", path: capture.path }, true)
+          return
+        } catch (error) {
+          const details = error as { code?: unknown; message?: unknown }
+          if (controller.signal.aborted || details?.code === "SCREEN_REGION_CANCELLED") return
+          const message = typeof details?.message === "string"
+            ? details.message
+            : "Could not capture the selected screen area. Try again."
+          this.publish({ id: randomUUID(), kind: "error", error: message }, true)
+          return
+        }
+      }
       const id = randomUUID()
       this.publish(result.ok === true ? { id, kind: "selection", text: result.text } : { id, kind: "error", error: result.error }, true)
     } catch {

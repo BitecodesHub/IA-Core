@@ -2,6 +2,7 @@
 
 import path from "node:path"
 import fs from "node:fs"
+import { execFile } from "node:child_process"
 import { app } from "electron"
 import { v4 as uuidv4 } from "uuid"
 
@@ -168,10 +169,103 @@ export class ScreenshotHelper {
     }
   }
 
+  /** Capture a user-selected screen region for OCR when AX has no selection. */
+  public async takeRegionScreenshot(
+    hideMainWindow: () => void,
+    showMainWindow: () => void,
+    signal: AbortSignal
+  ): Promise<string> {
+    if (process.platform !== "darwin") {
+      throw new Error("Screen region capture is only available on macOS.")
+    }
+
+    const request: CaptureRequest = { view: this.view, generation: this.captureGeneration }
+    const previous = this.captureChain
+    let release: () => void = () => {}
+    this.captureChain = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    try {
+      await previous.catch(() => {})
+      this.assertCaptureCurrent(request.generation)
+      if (signal.aborted) throw this.createCaptureAbortError()
+      const finalPath = await this.captureScreenshot(
+        request,
+        hideMainWindow,
+        showMainWindow,
+        () => this.captureRegionPng(signal),
+        signal
+      )
+      this.assertCaptureCurrent(request.generation)
+      return finalPath
+    } catch (error) {
+      if (request.generation !== this.captureGeneration) {
+        if (request.ownedPath) {
+          await fs.promises.unlink(request.ownedPath).catch((err) => {
+            if (isDev && err?.code !== "ENOENT") console.error("Error removing cancelled screenshot:", err)
+          })
+        }
+        this.assertCaptureCurrent(request.generation)
+      }
+      throw error
+    } finally {
+      release()
+    }
+  }
+
+  private createCaptureAbortError(): Error {
+    const error = new Error("Screen text capture was cancelled.")
+    error.name = "AbortError"
+    return error
+  }
+
+  private async captureRegionPng(signal: AbortSignal): Promise<Buffer> {
+    const temporaryPath = path.join(this.screenshotDir, `.region-${uuidv4()}.png`)
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile(
+          "/usr/sbin/screencapture",
+          ["-i", "-s", "-x", "-t", "png", temporaryPath],
+          {
+            encoding: "utf8",
+            timeout: 120_000,
+            maxBuffer: 64 * 1024,
+            killSignal: "SIGKILL",
+            signal,
+          },
+          (error) => (error ? reject(error) : resolve())
+        )
+      })
+      if (signal.aborted) throw this.createCaptureAbortError()
+
+      let png: Buffer
+      try {
+        png = await fs.promises.readFile(temporaryPath)
+      } catch (error: any) {
+        if (error?.code === "ENOENT") {
+          const cancelled = new Error("Screen text capture was cancelled.") as Error & { code: string }
+          cancelled.code = "SCREEN_REGION_CANCELLED"
+          throw cancelled
+        }
+        throw error
+      }
+      if (png.length === 0) {
+        const cancelled = new Error("Screen text capture was cancelled.") as Error & { code: string }
+        cancelled.code = "SCREEN_REGION_CANCELLED"
+        throw cancelled
+      }
+      return png
+    } finally {
+      await fs.promises.unlink(temporaryPath).catch(() => {})
+    }
+  }
+
   private async captureScreenshot(
     request: CaptureRequest,
     hideMainWindow: () => void,
-    showMainWindow: () => void
+    showMainWindow: () => void,
+    capture: () => Promise<Buffer> = () => this.capturePng(),
+    signal?: AbortSignal
   ): Promise<string> {
     try {
       hideMainWindow()
@@ -179,9 +273,11 @@ export class ScreenshotHelper {
       // Let the compositor settle so the overlay is really gone from the frame.
       await new Promise((resolve) => setTimeout(resolve, hideSettleMs(process.platform)))
       this.assertCaptureCurrent(request.generation)
+      if (signal?.aborted) throw this.createCaptureAbortError()
 
-      const png = await this.capturePng()
+      const png = await capture()
       this.assertCaptureCurrent(request.generation)
+      if (signal?.aborted) throw this.createCaptureAbortError()
 
       // Write straight to the destination. The previous implementation captured
       // to os.tmpdir() and renamed, which added an EXDEV/EPERM cross-volume
@@ -208,6 +304,9 @@ export class ScreenshotHelper {
       return finalPath
     } catch (error: any) {
       this.assertCaptureCurrent(request.generation)
+      if (signal?.aborted || error?.name === "AbortError" || error?.code === "SCREEN_REGION_CANCELLED") {
+        throw error
+      }
       console.error("Error taking screenshot:", error)
       const failure = classifyCaptureError(String(error?.message ?? error), process.platform)
       const err: any = new Error(failure.message)

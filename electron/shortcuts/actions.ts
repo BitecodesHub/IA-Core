@@ -51,7 +51,7 @@ export const SHORTCUT_ACTIONS: Record<ShortcutActionId, ShortcutActionDef> = {
   analyzeSelectedText: {
     id: "analyzeSelectedText",
     label: "Analyze Selected Text",
-    description: "Analyze the foreground app’s selection using your configured AI provider. Requires macOS Accessibility access.",
+    description: "Analyze selected text, or choose a screen area for OCR when the app does not expose a selection. Requires macOS Accessibility and Screen Recording access.",
     defaultAccelerator: "CommandOrControl+Alt+Shift+A",
     category: "processing",
     macOnly: true,

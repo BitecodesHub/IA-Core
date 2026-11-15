@@ -94,6 +94,35 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       : m))
   }
 
+  const startScreenshotAnalysis = async (path: string, label = "Analyzing screenshot…") => {
+    stopRequests()
+    void refetch()
+    setIsChatOpen(true)
+    const request = { id: crypto.randomUUID(), messageId: ++messageSequence, controller: new AbortController() }
+    screenshotRequestRef.current = request
+    setChatLoading(true)
+    setChatMessages((prev) => [
+      ...prev.map((m) => m.isStreaming ? { ...m, text: m.text || "Stopped", isStreaming: false } : m),
+      { role: "user", text: label, id: ++messageSequence, screenshotPath: path },
+      { role: "assistant", text: "", id: request.messageId, isStreaming: true },
+    ])
+    try {
+      const result = await window.electronAPI.processScreenshotWithChoice("answer", request.id)
+      if (!result.success) throw new Error(result.error || "Couldn't analyze that. Try again.")
+    } catch (error: any) {
+      if (screenshotRequestRef.current !== request) return
+      const text = formatProviderError(error?.message ?? error)
+      setChatMessages((prev) => prev.map((m) => m.id === request.messageId
+        ? { ...m, text: [m.text, text].filter(Boolean).join("\n\n"), isStreaming: false } : m))
+    } finally {
+      if (screenshotRequestRef.current === request) {
+        screenshotRequestRef.current = null
+        setChatLoading(false)
+        setChatMessages((prev) => prev.map((m) => m.id === request.messageId ? { ...m, isStreaming: false } : m))
+      }
+    }
+  }
+
   useLocalShortcuts(settings?.localShortcuts.bindings, {
     toggleChat: () => setIsChatOpen((v) => !v),
     toggleSettings: () => setIsSettingsOpen((v) => !v),
@@ -174,6 +203,10 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
           setChatMessages((prev) => [...prev, { role: "assistant", text: action.error, id: ++messageSequence }])
           return
         }
+        if (action.kind === "screenshot") {
+          await startScreenshotAnalysis(action.path, "Reading selected screen area…")
+          return
+        }
         stopRequests()
         await sendChatRef.current(`Analyze this selected text:\n\n${action.text}`, true)
       } catch {
@@ -248,33 +281,8 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   }, [])
 
   useEffect(() => {
-    const unsub = window.electronAPI.onScreenshotTaken(async ({ path }) => {
-      stopRequests()
-      void refetch()
-      setIsChatOpen(true)
-      const request = { id: crypto.randomUUID(), messageId: ++messageSequence, controller: new AbortController() }
-      screenshotRequestRef.current = request
-      setChatLoading(true)
-      setChatMessages((prev) => [
-        ...prev.map((m) => m.isStreaming ? { ...m, text: m.text || "Stopped", isStreaming: false } : m),
-        { role: "user", text: "Analyzing screenshot…", id: ++messageSequence, screenshotPath: path },
-        { role: "assistant", text: "", id: request.messageId, isStreaming: true },
-      ])
-      try {
-        const result = await window.electronAPI.processScreenshotWithChoice("answer", request.id)
-        if (!result.success) throw new Error(result.error || "Couldn't analyze that. Try again.")
-      } catch (error: any) {
-        if (screenshotRequestRef.current !== request) return
-        const text = formatProviderError(error?.message ?? error)
-        setChatMessages((prev) => prev.map((m) => m.id === request.messageId
-          ? { ...m, text: [m.text, text].filter(Boolean).join("\n\n"), isStreaming: false } : m))
-      } finally {
-        if (screenshotRequestRef.current === request) {
-          screenshotRequestRef.current = null
-          setChatLoading(false)
-          setChatMessages((prev) => prev.map((m) => m.id === request.messageId ? { ...m, isStreaming: false } : m))
-        }
-      }
+    const unsub = window.electronAPI.onScreenshotTaken(({ path }) => {
+      void startScreenshotAnalysis(path)
     })
     const onUpdate = (data: { requestId: string; problem_statement: string; isStreaming: boolean }) => {
       const request = screenshotRequestRef.current

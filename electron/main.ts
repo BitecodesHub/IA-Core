@@ -119,6 +119,10 @@ export class AppState {
 
     this.textActions = new TextActionCoordinator({
       selection: (signal) => this.macTextActions.selection(signal),
+      captureRegion: async (signal) => {
+        this.setView("queue")
+        return { path: await this.takeRegionScreenshot(signal) }
+      },
       paste: (signal) => this.macTextActions.paste(signal),
       session: () => BitecodesAuth.getInstance().getToken(),
       blocked: () => UpdateChecker.getInstance().isUpdateRequired(),
@@ -255,6 +259,20 @@ export class AppState {
     )
 
     return screenshotPath
+  }
+
+  public async takeRegionScreenshot(signal: AbortSignal): Promise<string> {
+    if (!this.getMainWindow()) throw new Error("No main window available")
+
+    const wasVisible = this.isVisible()
+    this.hintOverlay.destroy()
+    return this.screenshotHelper.takeRegionScreenshot(
+      () => this.hideMainWindow(),
+      () => {
+        if (wasVisible) this.showMainWindow()
+      },
+      signal
+    )
   }
 
   public async getImagePreview(filepath: string): Promise<string> {
