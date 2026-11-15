@@ -130,7 +130,7 @@
       ],
       "identity": null,
       "mergeASARs": true,
-      "x64ArchFiles": "**/node_modules/@img/**"
+      "x64ArchFiles": "{**/node_modules/@img/**,**/native/mac-text-actions}"
     },
     "win": {
       "target": [
